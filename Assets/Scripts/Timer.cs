@@ -37,4 +37,10 @@ public class Timer : MonoBehaviour
     public void StopTimer(){
         StopAllCoroutines();
     }
+
+    void Update(){
+        if(Input.GetKeyDown(KeyCode.R)){
+            UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
+        }
+    }
 }
