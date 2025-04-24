@@ -11,8 +11,9 @@ public class Node : IHeapItem<Node>
     //Needed so we can calculate the f cost easier
     public float hCost;
 
-    //The heading in radians
-    public float heading;
+    public Vector2 position;
+    //The direction in radians
+    public float direction;
     //Is the car reversing when traveling to this node?
     public bool isReversing;
 
@@ -29,21 +30,15 @@ public class Node : IHeapItem<Node>
     }
 
 
-    public Node(Node previousNode, float heading, bool isReversing)
+    public Node(Node previousNode, Vector2 position, float direction, bool isReversing, float gCost, float hCost)
     {
         this.previousNode = previousNode;
-        this.heading = heading;
+        this.position = position;
+        this.direction = direction;
         this.isReversing = isReversing;
-    }
-
-
-    //Cant be done in constructor because we need data from this node to calculate the costs
-    public void AddCosts(float gCost, float hCost)
-    {
         this.gCost = gCost;
         this.hCost = hCost;
     }
-
 
 
     //The total cost including heuristic (f = g + h)
@@ -52,27 +47,12 @@ public class Node : IHeapItem<Node>
         get { return gCost + hCost; }
     }
 
-
-
-    //Headings
-    public float HeadingInRadians
-    {
-        get { return this.heading; }
-    }
-
-    public float HeadingInDegrees
-    {
-        get { return this.heading * Mathf.Rad2Deg; }
-    }
-
-
-
     //Take the data from this node and add it to another node
     public void StealDataFromThisNode(Node other)
     {
         other.gCost = gCost;
         other.hCost = hCost;
-        other.heading = heading;
+        other.direction = direction;
         other.isReversing = isReversing;
         other.previousNode = previousNode;
     }

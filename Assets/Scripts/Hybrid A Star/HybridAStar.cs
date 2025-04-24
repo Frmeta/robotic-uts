@@ -6,73 +6,111 @@ using UnityEngine;
 public static class HybridAStar
 {
     //The distance between each waypoint
-    //Should be greater than the hypotenuse of the cell width or node may end up in the same cell
-    public static float driveDistance = Mathf.Sqrt(Parameters.cellWidth * Parameters.cellWidth * 2f) + 0.01f;
+    public static float driveDistance = 0.5f; // must be greater than cellSize
     //Used in the loop to easier include reversing
     private static float[] driveDistances = new float[] { driveDistance, -driveDistance};
+
     //The steering angles we are going to test
     private static float maxAngle = 30f;
     private static float[] steeringAngles = new float[] { -maxAngle * Mathf.Deg2Rad, 0f, maxAngle * Mathf.Deg2Rad };
-    //The car will never reach the exact goal position, this is how accurate we want to be
-    private const float posAccuracy = 1f;
-    private const float headingAccuracy = 10f;
-    //The heading resolution (Junior had 5) [degrees]
-    private const float headingResolution = 15f;
-    private const float headingResolutionTrailer = 15f;
-    //To time the different parts of the algorithm 
-    private static int timer_selectLowestCostNode;
-    private static int timer_addNodeToHeap;
-    private static int timer_findChildren;
-    private static int timer_isCollidingWithObstacle;
-    //At what distance to should we start expanding Reeds-Shepp nodes
-    private static float maxReedsSheppDist = 15f;
 
+    //The car will never reach the exact goal position, this is how accurate we want to be
+    private const float posAccuracy = 0.5f;
+
+    private static int carRadiusInCell = 5;
+    private static bool[,,] isVisited;
+    private static int directionCount = 8; // for checking isVisited
+
+    
+    public enum TileTypeWalkable { Walkable, NotWalkable };
+    
     //
     // Generate a path with Hybrid A*
     //
-    public static List<Node> GeneratePath(Vector2 startPosition, float startRotation, Vector2 endPosition, float[,] map, float[,] wallConfidenceMap)
+    public static List<Node> GeneratePath(Vector2 startPosition, float startRotation, Vector2 endPosition, MapBuilder.TileType[,] exploredMap, float[,] wallConfidenceMap)
     {
-        //Reset timers
-        timer_selectLowestCostNode = 0;
-        timer_addNodeToHeap = 0;
-        timer_findChildren = 0;
-        timer_isCollidingWithObstacle = 0;
-        //Other data we want to track
+        // get map width & height
+        int mapWidth = exploredMap.GetLength(0);
+        int mapHeight = exploredMap.GetLength(1);
 
+        // init isVisited
+        isVisited = new bool[mapWidth, mapHeight, directionCount];
+        for (int x = 0; x < mapWidth; x++)
+        {
+            for (int z = 0; z < mapWidth; z++)
+            {
+                for (int i = 0; i < directionCount; i++)
+                {
+                    isVisited[x, z, i] = false;
+                }
+            }
+        }
 
-        //Init the data structure we need
-        int mapWidth = map.GetLength(0);
-
+        // calculate minkowski sum of the map
+        TileTypeWalkable[,] walkableMap = CalculateMinkowskiSum(exploredMap, wallConfidenceMap);
+        
         //Open nodes - the parameter is how many items can fit in the heap
         //If we lower the heap size it will still find a path, which is more drunk
         Heap<Node> openNodes = new Heap<Node>(200000);
-        //int in the dictionaries below is the rounded heading used to enter a cell
-        HashSet<int>[,] closedCells = new HashSet<int>[mapWidth, mapWidth];
-        //The node in the cell with the lowest g-cost at a certain angle
-        Dictionary<int, Node>[,] lowestCostNodes = new Dictionary<int, Node>[mapWidth, mapWidth];
-        //Trailer
-        //int in the dictionaries below is the rounded heading used to enter a cell
-        HashSet<int>[,] closedCellsTrailer = new HashSet<int>[mapWidth, mapWidth];
-        HashSet<int>[,] lowestCostNodesTrailer = new HashSet<int>[mapWidth, mapWidth];
+        
+
+        //Create the first node
+        Node startNode = new Node(null, startPosition, startRotation, false, 0, 0);
+       
+        List<Node> finalPath = new List<Node>();
+        return finalPath;
+    }
+
+    private static TileTypeWalkable[,] CalculateMinkowskiSum(MapBuilder.TileType[,] map, float[,] wallConfidenceMap){
+        //Calculate the Minkowski sum of the map
+        int mapWidth = map.GetLength(0);
+        int mapHeight = map.GetLength(1);
+        TileTypeWalkable[,] minkowskiMap = new TileTypeWalkable[mapWidth, mapHeight];
 
         for (int x = 0; x < mapWidth; x++)
         {
             for (int z = 0; z < mapWidth; z++)
             {
-                closedCells[x, z] = new HashSet<int>();
-                lowestCostNodes[x, z] = new Dictionary<int, Node>();
-
-                //Trailer
-                closedCellsTrailer[x, z] = new HashSet<int>();
-                lowestCostNodesTrailer[x, z] = new HashSet<int>();
+                if (map[x, z] == MapBuilder.TileType.Explored)
+                {
+                    minkowskiMap[x, z] = TileTypeWalkable.Walkable;
+                }
+                else
+                {
+                    minkowskiMap[x, z] = TileTypeWalkable.NotWalkable;
+                }
             }
         }
 
+        //Calculate the Minkowski sum
+        for (int x = 0; x < mapWidth; x++)
+        {
+            for (int z = 0; z < mapWidth; z++)
+            {
+                if (wallConfidenceMap[x, z] > 0.5f)
+                {
+                    // check surroundings in circle using carRadiusInCell
+                    for (int i = -carRadiusInCell; i <= carRadiusInCell; i++)
+                    {
+                        for (int j = -carRadiusInCell; j <= carRadiusInCell; j++)
+                        {
+                            if (x + i >= 0 && x + i < mapWidth
+                                && z + j >= 0 && z + j < mapHeight
+                                && (i * i + j * j) <= (carRadiusInCell * carRadiusInCell)
+                                )
+                            {
+                                if (minkowskiMap[x + i, z + j] == TileTypeWalkable.Walkable)
+                                {
+                                    minkowskiMap[x + i, z + j] = TileTypeWalkable.NotWalkable;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        //Create the first node
-       
-        List<Node> finalPath = new List<Node>();
-        return finalPath;
+        return minkowskiMap;
     }
 
 }

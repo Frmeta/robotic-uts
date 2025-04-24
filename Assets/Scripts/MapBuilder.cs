@@ -20,16 +20,19 @@ public class MapBuilder : MonoBehaviour
     public Transform[] borders;
 
     public Tile whiteTile;
-    public int robotRadiusInCell;
     public MapVisualizer mapVisualizer;
     public float lidarIntervalDistance = 1f;
 
 
     private LineRenderer[] lineRenderers;
+
+    // Map settings
     [HideInInspector] public Vector2Int tilemapOffset;
+
     [HideInInspector] public TileType[,] map;
     [HideInInspector] public float[,] wallConfidenceMap;
     private int[,] lidarCountMap;
+
     private List<Vector2Int> frontierTiles = new List<Vector2Int>();
 
     private Vector2Int[] neighbors = new Vector2Int[]
@@ -85,9 +88,9 @@ public class MapBuilder : MonoBehaviour
         Debug.Log("Map size: " + map.GetLength(0) + "x" + map.GetLength(1) + " cells, " + (map.GetLength(0) * map.GetLength(1)) + " cells total.");
     }
 
-    // Update is called once per frame
     void Update()
     {
+        // shoot lidar after moved a certain distance
         lidarNeededDistance -= GetComponent<Rigidbody>().velocity.magnitude * Time.deltaTime;
         if (lidarNeededDistance <= 0)
         {
@@ -97,7 +100,7 @@ public class MapBuilder : MonoBehaviour
     }
 
     void Lidar(){
-         // lidar in action
+        // lidar in action
         for (int i = 0; i < numberOfRays; i++)
         {
             // shoot ray
@@ -127,7 +130,6 @@ public class MapBuilder : MonoBehaviour
             } else {
                 end = ray.origin + ray.direction * rayLength;
             }
-
 
             // Bresenham's line algorithm to draw line
             Vector2Int startCell = WorldToMap(start);
@@ -174,7 +176,7 @@ public class MapBuilder : MonoBehaviour
         }
     }
 
-    void Explore(Vector2Int mapPos, bool isWall)
+    private void Explore(Vector2Int mapPos, bool isWall)
     {
         // asert bounds
         if (mapPos.x < 0 || mapPos.x >= map.GetLength(0) || mapPos.y < 0 || mapPos.y >= map.GetLength(1)) {
@@ -228,7 +230,7 @@ public class MapBuilder : MonoBehaviour
         
     }
 
-    void SetTile(Vector2Int mapPos, TileType tileType) // just update the tile & visualizer, no other check
+    private void SetTile(Vector2Int mapPos, TileType tileType) // just update the tile & visualizer, no other check
     {
         // no need to update if same type
         if (map[mapPos.x, mapPos.y] == tileType) return; 
