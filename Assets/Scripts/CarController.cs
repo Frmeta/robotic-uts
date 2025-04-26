@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Security.Cryptography.X509Certificates;
+using UnityEditor.UI;
 using UnityEngine;
 using UnityEngine.Assertions;
 
@@ -10,9 +11,16 @@ public enum DriveType
 {
     Manual, Automatic
 }
+public enum State
+{
+    Stop, Exploring, GoToBomb
+}
 public class CarController : MonoBehaviour
 {
     public DriveType driveType = DriveType.Manual;
+    public State state = State.Stop;
+
+    [Header("Wheel Reference")]
     public WheelCollider leftFrontWheel;
     public WheelCollider rightFrontWheel;
     public WheelCollider leftBackWheel;
@@ -21,26 +29,29 @@ public class CarController : MonoBehaviour
     public GameObject rightFrontWheelMesh;
     public GameObject leftBackWheelMesh;
     public GameObject rightBackWheelMesh;
+
+    
+    [Header("Car Settings")]
     public float acceleration = 10f;
     public float maxSteerAngle = 30f;
     public float brakeAcceleration = 10f;
+    public float goToNodeAccuracy = 0.2f;
     
 
-    private float currentAcceleration;
-    private float currentSteerAngle;
-    private float currentBrakeAcceleration;
 
     [Header("Triangulation")]
     public Transform[] landmarks;
     public Transform triangulationLocationVisualizer;
+
     
-    [Header("Inertia")]
+    [Header("Odometry")]
     public Transform intertiaLocationVisualizer;
     public float wheelBase = 1f;
     private Rigidbody rb;
     private float x_inertia;
     private float z_inertia;
     private float theta_inertia;
+
 
     [Header("Average")]
     public Transform averageLocationVisualizer;
@@ -49,13 +60,25 @@ public class CarController : MonoBehaviour
     private float inputSteerAngle;
     private float inputBrakeAcceleration;
 
+    [Header("Other")]
+    public GameObject bolaBiru;
+
     
+    // temporary variables
+    private float currentAcceleration;
+    private float currentSteerAngle;
+    private float currentBrakeAcceleration;
+    private List<Node>.Enumerator nodesEnumerator;
+    private List<GameObject> nodesDebug = new List<GameObject>();
 
-
+    public static CarController instance;
     // hint: motorTorque, steerAngle, brakeTorque
     // Start is called before the first frame update
     void Start()
     {
+        if (instance == null){
+            instance = this;
+        }
         rb = GetComponent<Rigidbody>();
         mapBuilder = GetComponent<MapBuilder>();
 
@@ -81,7 +104,53 @@ public class CarController : MonoBehaviour
 
             case DriveType.Automatic:
                 //TODO
+                if (state == State.Stop){
+                    Debug.Log("starting hybrid A*");
+                    state = State.Exploring;
+                    List<Node> nodes = MapBuilder.instance.getPathToBestTarget();
+                    Debug.Log("Succesfully created path with length: " + nodes.Count.ToString());
+                    nodesEnumerator = nodes.GetEnumerator();
+
+                    // remove existing nodesDebug
+                    foreach (GameObject u in nodesDebug){
+                        Destroy(u);
+                    }
+                    nodesDebug.Clear();
+
+                    // add new nodesDebug
+                    foreach (Node node in nodes){
+                        Debug.Log("bola biruuu");
+                        GameObject bolaBiruu = Instantiate(bolaBiru,
+                            new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.y),
+                            Quaternion.identity);
+                        nodesDebug.Add(bolaBiru);
+                    }
+
+                } else if (state == State.Exploring){
+
+                    // if near nextNode
+                    if (Vector2.Distance(
+                            nodesEnumerator.Current.worldPosition,
+                            new Vector2(transform.position.x, transform.position.z)
+                        ) 
+                        < goToNodeAccuracy
+                    ){
+                        bool hasNext = nodesEnumerator.MoveNext();
+                        if (!hasNext){
+                            state = State.Stop;
+                        }
+                    }
+
+                    // float speedScale = 0.5f;
+                    // inputForward = nodesEnumerator.Current.isReversing ? speedScale : -speedScale;
+                    // inputSteerAngle = ;
+                    // inputBrakeAcceleration = Input.GetKey(KeyCode.Space) ? 1 : 0;
+                    
+                }
                 
+
+
+
                 break;
         }
 
@@ -143,12 +212,10 @@ public class CarController : MonoBehaviour
         float dx = velocity * Mathf.Sin(theta_inertia) * dt;
         float dz = velocity * Mathf.Cos(theta_inertia) * dt;
         float dtheta = (velocity / wheelBase) * Mathf.Tan(phi) * dt;
-        //float dtheta = rb.rotation.eulerAngles.y * Mathf.Deg2Rad; 
 
         x_inertia += dx;
         z_inertia += dz;
         theta_inertia += dtheta;
-        //Debug.Log(theta_inertia.ToString() + " " + (transform.rotation.eulerAngles.y * Mathf.Deg2Rad).ToString());
 
         intertiaLocationVisualizer.position = new Vector3(x_inertia, intertiaLocationVisualizer.position.y, z_inertia);
         intertiaLocationVisualizer.rotation = Quaternion.Euler(0, theta_inertia * Mathf.Rad2Deg, 0);

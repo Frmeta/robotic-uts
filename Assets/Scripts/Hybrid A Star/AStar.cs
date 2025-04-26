@@ -3,7 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class AStar : MonoBehaviour
+public class AStar
 {
     // singleton
     private static AStar instance = null;
@@ -32,11 +32,13 @@ public class AStar : MonoBehaviour
 
         // init costToGoal
         float[,] costToGoal = new float[walkableMap.GetLength(0), walkableMap.GetLength(1)];
+        bool[,] isVisitedMap = new bool[walkableMap.GetLength(0), walkableMap.GetLength(1)];
         for (int x = 0; x < walkableMap.GetLength(0); x++)
         {
             for (int y = 0; y < walkableMap.GetLength(1); y++)
             {
                 costToGoal[x, y] = float.MaxValue; // Initialize with a large value
+                isVisitedMap[x,y] = false;
             }
         }
 
@@ -52,6 +54,7 @@ public class AStar : MonoBehaviour
         {
             // pop from heap
             NodeAStar currentNode = openNodes.RemoveFirst();
+            isVisitedMap[currentNode.position.x, currentNode.position.y] = true;
 
             // Get neighbors (must inside the map))
             foreach (var neighborTuple in GetNeighbors(currentNode.position, walkableMap))
@@ -65,7 +68,7 @@ public class AStar : MonoBehaviour
                     float newCost = (float)(currentNode.cost + neighborTuple.Item2);
 
                     // if newCost is less than the current cost to the neighbor
-                    if (newCost < costToGoal[neighbor.x, neighbor.y])
+                    if (!isVisitedMap[currentNode.position.x, currentNode.position.y] && newCost < costToGoal[neighbor.x, neighbor.y])
                     {
                         // update the cost to the neighbor and add it to the open nodes
                         costToGoal[neighbor.x, neighbor.y] = newCost;

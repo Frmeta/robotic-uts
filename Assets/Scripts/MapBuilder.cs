@@ -24,6 +24,7 @@ public class MapBuilder : MonoBehaviour
     [Header("Map settings")]
     public Transform[] borders;
 
+
     [Header("Car settings")]
     public int carRadiusInCell = 5; // in cells, not meters
 
@@ -52,10 +53,18 @@ public class MapBuilder : MonoBehaviour
 
     private float lidarNeededDistance = 0;
     private LineRenderer[] lineRenderers;
+    public static MapBuilder instance = null;
+
 
 
     void Awake()
     {
+        // singleton
+        if (instance == null)
+        {
+            instance = this;
+        }
+
         // init lidar visualizer
         lineRenderers = new LineRenderer[numberOfRays];
         for (int i = 0; i < numberOfRays; i++)
@@ -104,9 +113,11 @@ public class MapBuilder : MonoBehaviour
         {
             lidarNeededDistance = lidarIntervalDistance;
             Lidar();
-            
+
+            // calculate walkable map
             TileTypeWalkable[,] walkableMap = CalculateMinkowskiSum();
-            aStarMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(lidarTransform.position));
+            aStarMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(transform.position));
+            MapVisualizer.instance.UpdateAStarMap(walkableMap, aStarMap);
         }
     }
 
@@ -191,7 +202,6 @@ public class MapBuilder : MonoBehaviour
     {
         // asert bounds
         if (mapPos.x < 0 || mapPos.x >= tileTypeMap.GetLength(0) || mapPos.y < 0 || mapPos.y >= tileTypeMap.GetLength(1)) {
-            Debug.Log("Out of bounds: " + mapPos);
             return;
         }
 
@@ -210,11 +220,10 @@ public class MapBuilder : MonoBehaviour
         } else {
             wallConfidenceMap[mapPos.x, mapPos.y] = (wallConfidenceMap[mapPos.x, mapPos.y]*(float)(lidarCountMap[mapPos.x, mapPos.y]-1) + ((isWall) ? 1f : 0f))/(float)lidarCountMap[mapPos.x, mapPos.y];
         }
-        //Debug.Log("Wall confidence: " + wallConfidenceMap[mapPos.x, mapPos.y] + " at " + mapPos);
         SetTile(mapPos, TileType.Explored);
 
 
-        if (wallConfidenceMap[mapPos.x, mapPos.y] < 0.05f) // if not wall
+        if (wallConfidenceMap[mapPos.x, mapPos.y] < 0.5f) // if not wall
         {
             foreach (Vector2Int neighbor in neighbors)
             {
@@ -243,18 +252,34 @@ public class MapBuilder : MonoBehaviour
 
     private void SetTile(Vector2Int mapPos, TileType tileType) // just update the tile & visualizer, no other check
     {
-        // no need to update if same type
-        if (tileTypeMap[mapPos.x, mapPos.y] == tileType) return; 
 
         // update map
         tileTypeMap[mapPos.x, mapPos.y] = tileType;
         
         // update visual
-        MapVisualizer.Instance.SetTile(mapPos, tileType);
+        MapVisualizer.instance.SetTile(mapPos, tileType);
          
     }
 
-    public Vector3 pathFindToBestFrontier(){
+    public List<Node> getPathToBestTarget(){
+        /// get best target (frontier)
+        Vector3 bestTarget = getBestTarget();
+        Debug.Log("Best target: " + bestTarget.ToString());
+
+        return HybridAStar.Instance.GeneratePath(
+            transform.position,
+            transform.rotation.y * Mathf.Deg2Rad,
+            bestTarget,
+            walkableMap,
+            aStarMap,
+            wallConfidenceMap,
+            false,
+            CarController.instance.wheelBase
+            );
+    }
+
+    private Vector3 getBestTarget(){
+        Debug.Log("get best target");
         // find clusters
         List<List<Vector2Int>> clusters = new List<List<Vector2Int>>();
         List<Vector2Int> visited = new List<Vector2Int>();
@@ -294,7 +319,8 @@ public class MapBuilder : MonoBehaviour
             }
         }
 
-        // find best cluster
+        Debug.Log("get best target2");
+        // find 'best' cluster
         List<Vector2Int> bestCluster = null;
         float bestClusterScore = 0;
         foreach (List<Vector2Int> cluster in clusters)
@@ -313,27 +339,23 @@ public class MapBuilder : MonoBehaviour
                 bestCluster = cluster;
             }
         }
+        
+        Debug.Log("get best target3");
 
-        // find the closest tile to the center of the best cluster
-        Vector2Int bestCenter = new Vector2Int(0, 0);
+        // find the closest tile to player using aStar
+        float highScore = aStarMap[bestCluster[0].x, bestCluster[0].y];
+        Vector2Int highScoreHolder = bestCluster[0];
         foreach (Vector2Int tile in bestCluster)
         {
-            bestCenter += tile;
+            float score = aStarMap[tile.x, tile.y];
+            if (score < highScore) {
+                highScore = score;
+                highScoreHolder = tile;
+            } 
         }
-        bestCenter /= bestCluster.Count;
-        Vector2Int closestTile = bestCluster[0];
-        float closestDistance = Vector2.Distance(bestCenter, bestCluster[0]);
-        foreach (Vector2Int tile in bestCluster)
-        {
-            float distance = Vector2.Distance(bestCenter, tile);
-            if (distance < closestDistance)
-            {
-                closestDistance = distance;
-                closestTile = tile;
-            }
-        }
+        Debug.Log("done best target");
         // return world pos
-        return MapToWorld(closestTile);
+        return MapToWorld(highScoreHolder);
     }
 
     public Vector2Int WorldToMap(Vector3 worldPos)
@@ -359,9 +381,10 @@ public class MapBuilder : MonoBehaviour
         TileTypeWalkable[,] minkowskiMap = new TileTypeWalkable[mapWidth, mapHeight];
         for (int x = 0; x < mapWidth; x++)
         {
-            for (int z = 0; z < mapWidth; z++)
+            for (int z = 0; z < mapHeight; z++)
             {
-                if (tileTypeMap[x, z] == MapBuilder.TileType.Explored)
+                // assign walkable if explored
+                if (tileTypeMap[x, z] == MapBuilder.TileType.Explored || tileTypeMap[x, z] == MapBuilder.TileType.Frontier)
                 {
                     minkowskiMap[x, z] = TileTypeWalkable.Walkable;
                 }
@@ -372,11 +395,12 @@ public class MapBuilder : MonoBehaviour
             }
         }
 
-        //Calculate the Minkowski sum
+        // convert walkable into not walkable if near wall
         for (int x = 0; x < mapWidth; x++)
         {
-            for (int z = 0; z < mapWidth; z++)
+            for (int z = 0; z < mapHeight; z++)
             {
+                // if wall
                 if (wallConfidenceMap[x, z] > 0.5f)
                 {
                     // check surroundings in circle using carRadiusInCell

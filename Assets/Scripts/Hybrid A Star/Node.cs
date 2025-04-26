@@ -6,12 +6,18 @@ using System;
 public class Node : IHeapItem<Node>
 {
 
-    public Vector2 position;
+    public Vector2 worldPosition;
     //The direction in radians
     public float direction;
     //Is the car reversing when traveling to this node?
     //The cost to this node
-    public float fCost;
+    public float costStartToNode;
+    public float costHeuristicNodeToEnd;
+    public float fCost {
+        get{
+            return costStartToNode + costHeuristicNodeToEnd;
+        }
+    }
     public bool isReversing;
 
     //The node we took to get here so we can get the final path
@@ -21,18 +27,14 @@ public class Node : IHeapItem<Node>
     private int heapIndex;
 
 
-    public Node()
-    {
-
-    }
-
-
-    public Node(Node previousNode, Vector2 position, float direction, bool isReversing, float fCost)
+    public Node(Node previousNode, Vector2 position, float direction, bool isReversing, float costStartToNode, float costHeuristicNodeToEnd)
     {
         this.previousNode = previousNode;
-        this.position = position;
+        this.worldPosition = position;
         this.direction = direction;
         this.isReversing = isReversing;
+        this.costStartToNode = costStartToNode;
+        this.costHeuristicNodeToEnd = costHeuristicNodeToEnd;
     }
 
     //The heap requires that we implement this
@@ -56,10 +58,10 @@ public class Node : IHeapItem<Node>
 
         //If they are equal, use the one that is the closest
         //Will return 1, 0 or -1, so 0 means the f costs are the same
-        // if (compare == 0)
-        // {
-        //     compare = hCost.CompareTo(nodeToCompare.hCost);
-        // }
+        if (compare == 0)
+        {
+            compare = costHeuristicNodeToEnd.CompareTo(nodeToCompare.costHeuristicNodeToEnd);
+        }
 
         return -compare;
     }

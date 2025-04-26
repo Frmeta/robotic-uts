@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -6,67 +7,94 @@ using UnityEngine.UI;
 
 public class MapVisualizer : MonoBehaviour
 {
+    
+    [Header("Tilemap")]
     public Tilemap tilemap;
     public TileBase whiteTile;
     public MapBuilder mapBuilder;
-    [Header("Minimap")]
-    public RawImage minimapRawImage;
-    public RectTransform minimapScaler;
-    public GameObject objectToFollow;
-    public float zoom = 1f;
 
 
-    private bool isMaterialChanged = false;
+    [Serializable]
+    public class Minimap {
+        public RawImage minimapRawImage;
+        public RectTransform minimapScaler;
+        [HideInInspector] public Texture2D minimapTexture;
+    }
     
 
-    private Texture2D minimapTexture;
+    [Header("Minimap")]
+    public Minimap tileTypeMinimap;
+    public Minimap aStarMinimap;
+    public Minimap walkableMinimap;
+    public Minimap hybridAStarMinimap;
+    public GameObject objectToFollow;
+    public float zoom = 1f;
+    public float minZoom = 0.1f;
+    public float maxZoom = 7f;
+    public Scrollbar zoomScrollbar;
+
+
+    // Temporary variables
+    private bool isMaterialChanged = false;
+    private int mapWidth;
+    private int mapHeight;
+    private Minimap[] minimaps;
 
     // singleton
     public static MapVisualizer instance = null;
-    public static MapVisualizer Instance
-    {
-        get
-        {
-            if (instance == null) 
-            {
-                instance = new MapVisualizer();
-            }
-            return instance;
-        }
-    }
 
-    // Start is called before the first frame update
+
     void Start()
     {
-        minimapTexture = new Texture2D(mapBuilder.tileTypeMap.GetLength(0), mapBuilder.tileTypeMap.GetLength(1), TextureFormat.RGBA32, false);
-        minimapTexture.filterMode = FilterMode.Point;
-        minimapTexture.wrapMode = TextureWrapMode.Repeat;
-        minimapRawImage.texture = minimapTexture;
-        minimapRawImage.rectTransform.sizeDelta = new Vector2(mapBuilder.tileTypeMap.GetLength(0), mapBuilder.tileTypeMap.GetLength(1));
+        // singleton
+        if (instance == null)
+        {
+            instance = this;
+        }
 
+        // zoom scrollbar listener
+        zoomScrollbar.onValueChanged.AddListener((value) => {
+            zoom = Mathf.Lerp(minZoom, maxZoom, value);
+        });
+
+        // get map width & height
+        mapWidth = mapBuilder.tileTypeMap.GetLength(0);
+        mapHeight = mapBuilder.tileTypeMap.GetLength(1);
+
+        // init minimap texture
+        minimaps = new Minimap[] { tileTypeMinimap, walkableMinimap, aStarMinimap, hybridAStarMinimap };
+        foreach (Minimap minimap in minimaps)
+        {
+            InitMinimapTexture(minimap);
+        }
     }
+    
 
-    // Update is called once per frame
     void Update()
     {
-        // follow object
+        // follow object (in this case, the car)
         if (objectToFollow != null)
         {
             Vector3 diff = objectToFollow.transform.position -
                 mapBuilder.MapToWorld( new Vector2Int(mapBuilder.tileTypeMap.GetLength(0) / 2, mapBuilder.tileTypeMap.GetLength(1) / 2));
             Vector2 diff2 = new Vector2(diff.x, diff.z);
             Vector3 newPos = new Vector3(-diff2.x, - diff2.y, 0);
-            minimapRawImage.rectTransform.anchoredPosition = newPos/mapBuilder.cellSize;
 
-            minimapScaler.localScale = new Vector3(1, 1, 1) * zoom;
-            minimapScaler.rotation = Quaternion.Euler(0, 0, objectToFollow.transform.rotation.y * Mathf.Rad2Deg + 45f);
+            foreach (Minimap minimap in minimaps)
+            {
+                // update position, rotation, scale
+                minimap.minimapRawImage.rectTransform.anchoredPosition = newPos/mapBuilder.cellSize;
+                minimap.minimapScaler.localScale = new Vector3(1, 1, 1) * zoom;
+                minimap.minimapScaler.rotation = Quaternion.Euler(0, 0, objectToFollow.transform.rotation.y * Mathf.Rad2Deg + 45f);
+            }
+           
         }
     }
 
     void LateUpdate()
     {
         if (isMaterialChanged){
-            minimapTexture.Apply();
+            tileTypeMinimap.minimapTexture.Apply();
             isMaterialChanged = false;
         }
     }
@@ -88,7 +116,7 @@ public class MapVisualizer : MonoBehaviour
         {
             // unexplored tiles
             tilemap.SetTile(cellPosForTilemap, null);
-            minimapTexture.SetPixel(cellPosForTilemap.x, cellPosForTilemap.y, unexploredColor);
+            tileTypeMinimap.minimapTexture.SetPixel(cellPosForTilemap.x, cellPosForTilemap.y, unexploredColor);
         }
         else
         {
@@ -98,18 +126,44 @@ public class MapVisualizer : MonoBehaviour
                 // explored tiles
                 // lerp between wallConfidence green to red
                 Color lerpedColor = Color.Lerp(walkableColor, obstacleColor, mapBuilder.wallConfidenceMap[mapPos.x, mapPos.y]);
-                Debug.Log("color: " + lerpedColor + " wallConfidence: " + mapBuilder.wallConfidenceMap[mapPos.x, mapPos.y]);
                 tilemap.SetColor(cellPosForTilemap, lerpedColor);
-                minimapTexture.SetPixel(mapPos.x, mapPos.y, lerpedColor);
+                tileTypeMinimap.minimapTexture.SetPixel(mapPos.x, mapPos.y, lerpedColor);
                 
             } else if (tileType == MapBuilder.TileType.Frontier)
             {
                 // frontier tiles
                 tilemap.SetColor(cellPosForTilemap, frontierColor);
-                minimapTexture.SetPixel(mapPos.x, mapPos.y, frontierColor);
+                tileTypeMinimap.minimapTexture.SetPixel(mapPos.x, mapPos.y, frontierColor);
             }
         }
         isMaterialChanged = true;
-         
+    }
+
+    public void UpdateAStarMap(MapBuilder.TileTypeWalkable[,] walkableMap, float[,] costMap)
+    {
+        for (int x = 0; x < costMap.GetLength(0); x++)
+        {
+            for (int y = 0; y < costMap.GetLength(1); y++)
+            {
+                // walkable minimap
+                walkableMinimap.minimapTexture.SetPixel(x, y, Color.Lerp(Color.white, Color.black, walkableMap[x,y] == MapBuilder.TileTypeWalkable.Walkable ? 0 : 1));
+
+                // a* minimap
+                Color color = Color.Lerp(Color.white, Color.black,costMap[x, y]/25f);
+                aStarMinimap.minimapTexture.SetPixel(x, y, color);
+            }
+        }
+        aStarMinimap.minimapTexture.Apply();
+    }
+
+
+
+    void InitMinimapTexture(Minimap minimap)
+    {
+        minimap.minimapTexture = new Texture2D(mapWidth, mapHeight, TextureFormat.RGBA32, false);
+        minimap.minimapTexture.filterMode = FilterMode.Point;
+        minimap.minimapTexture.wrapMode = TextureWrapMode.Repeat;
+        minimap.minimapRawImage.texture = minimap.minimapTexture;
+        minimap.minimapRawImage.rectTransform.sizeDelta = new Vector2(mapWidth, mapHeight);
     }
 }
