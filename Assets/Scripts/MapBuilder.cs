@@ -9,29 +9,36 @@ using UnityEngine.Tilemaps;
 
 public class MapBuilder : MonoBehaviour
 {
+    // inputs
+
+    [Header("Lidar settings")]
     public Transform lidarTransform;
     public int numberOfRays = 32;
     public float rayLength = 5;
+    public float lidarIntervalDistance = 1f;
     public Material lineMaterial;
     public float rayWidth = 0.02f;
     public float cellSize = 0.2f;
-    public enum TileType { Unexplored, Frontier, Explored };
+
     
+    [Header("Map settings")]
     public Transform[] borders;
 
-    public Tile whiteTile;
-    public MapVisualizer mapVisualizer;
-    public float lidarIntervalDistance = 1f;
+    [Header("Car settings")]
+    public int carRadiusInCell = 5; // in cells, not meters
 
 
-    private LineRenderer[] lineRenderers;
 
-    // Map settings
-    [HideInInspector] public Vector2Int tilemapOffset;
-
-    [HideInInspector] public TileType[,] map;
+    // temporary variables
+    
+    public enum TileType { Unexplored, Frontier, Explored };
+    public enum TileTypeWalkable { Walkable, NotWalkable };
+    [HideInInspector] public TileType[,] tileTypeMap;
     [HideInInspector] public float[,] wallConfidenceMap;
-    private int[,] lidarCountMap;
+    [HideInInspector] public TileTypeWalkable[,] walkableMap;
+    [HideInInspector] public float[,] aStarMap;
+    [HideInInspector] private int[,] lidarCountMap;
+    [HideInInspector] public Vector2Int tilemapOffset;
 
     private List<Vector2Int> frontierTiles = new List<Vector2Int>();
 
@@ -44,7 +51,8 @@ public class MapBuilder : MonoBehaviour
             };
 
     private float lidarNeededDistance = 0;
-    
+    private LineRenderer[] lineRenderers;
+
 
     void Awake()
     {
@@ -75,17 +83,17 @@ public class MapBuilder : MonoBehaviour
         tilemapOffset = new Vector2Int(borderMinXCell, borderMinYCell);
 
         // init map
-        map = new TileType[borderMaxXCell - borderMinXCell + 1, borderMaxYCell - borderMinYCell + 1];
+        tileTypeMap = new TileType[borderMaxXCell - borderMinXCell + 1, borderMaxYCell - borderMinYCell + 1];
         wallConfidenceMap = new float[borderMaxXCell - borderMinXCell + 1, borderMaxYCell - borderMinYCell + 1];
         lidarCountMap = new int[borderMaxXCell - borderMinXCell + 1, borderMaxYCell - borderMinYCell + 1];
-        for (int x = 0; x < map.GetLength(0); x++)
+        for (int x = 0; x < tileTypeMap.GetLength(0); x++)
         {
-            for (int y = 0; y < map.GetLength(1); y++)
+            for (int y = 0; y < tileTypeMap.GetLength(1); y++)
             {
-                map[x, y] = TileType.Unexplored;
+                tileTypeMap[x, y] = TileType.Unexplored;
             }
         }
-        Debug.Log("Map size: " + map.GetLength(0) + "x" + map.GetLength(1) + " cells, " + (map.GetLength(0) * map.GetLength(1)) + " cells total.");
+        Debug.Log("Map size: " + tileTypeMap.GetLength(0) + "x" + tileTypeMap.GetLength(1) + " cells, " + (tileTypeMap.GetLength(0) * tileTypeMap.GetLength(1)) + " cells total.");
     }
 
     void Update()
@@ -96,6 +104,9 @@ public class MapBuilder : MonoBehaviour
         {
             lidarNeededDistance = lidarIntervalDistance;
             Lidar();
+            
+            TileTypeWalkable[,] walkableMap = CalculateMinkowskiSum();
+            aStarMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(lidarTransform.position));
         }
     }
 
@@ -179,13 +190,13 @@ public class MapBuilder : MonoBehaviour
     private void Explore(Vector2Int mapPos, bool isWall)
     {
         // asert bounds
-        if (mapPos.x < 0 || mapPos.x >= map.GetLength(0) || mapPos.y < 0 || mapPos.y >= map.GetLength(1)) {
+        if (mapPos.x < 0 || mapPos.x >= tileTypeMap.GetLength(0) || mapPos.y < 0 || mapPos.y >= tileTypeMap.GetLength(1)) {
             Debug.Log("Out of bounds: " + mapPos);
             return;
         }
 
         // if prev was frontier, remove it from list
-        if (map[mapPos.x, mapPos.y] == TileType.Frontier)
+        if (tileTypeMap[mapPos.x, mapPos.y] == TileType.Frontier)
         {
             frontierTiles.Remove(mapPos);
         }
@@ -208,8 +219,8 @@ public class MapBuilder : MonoBehaviour
             foreach (Vector2Int neighbor in neighbors)
             {
                 Vector2Int neighborPosition = mapPos + neighbor;
-                if (neighborPosition.x < 0 || neighborPosition.x >= map.GetLength(0) || neighborPosition.y < 0 || neighborPosition.y >= map.GetLength(1)) continue;
-                if (map[neighborPosition.x, neighborPosition.y] == TileType.Unexplored)
+                if (neighborPosition.x < 0 || neighborPosition.x >= tileTypeMap.GetLength(0) || neighborPosition.y < 0 || neighborPosition.y >= tileTypeMap.GetLength(1)) continue;
+                if (tileTypeMap[neighborPosition.x, neighborPosition.y] == TileType.Unexplored)
                 {
                     frontierTiles.Add(neighborPosition);
                     SetTile(neighborPosition, TileType.Frontier);
@@ -219,8 +230,8 @@ public class MapBuilder : MonoBehaviour
             foreach (Vector2Int neighbor in neighbors)
             {
                 Vector2Int neighborPosition = mapPos + neighbor;
-                if (neighborPosition.x < 0 || neighborPosition.x >= map.GetLength(0) || neighborPosition.y < 0 || neighborPosition.y >= map.GetLength(1)) continue;
-                if (map[neighborPosition.x, neighborPosition.y] == TileType.Frontier)
+                if (neighborPosition.x < 0 || neighborPosition.x >= tileTypeMap.GetLength(0) || neighborPosition.y < 0 || neighborPosition.y >= tileTypeMap.GetLength(1)) continue;
+                if (tileTypeMap[neighborPosition.x, neighborPosition.y] == TileType.Frontier)
                 {
                     frontierTiles.Remove(neighborPosition);
                     SetTile(neighborPosition, TileType.Unexplored);
@@ -233,13 +244,13 @@ public class MapBuilder : MonoBehaviour
     private void SetTile(Vector2Int mapPos, TileType tileType) // just update the tile & visualizer, no other check
     {
         // no need to update if same type
-        if (map[mapPos.x, mapPos.y] == tileType) return; 
+        if (tileTypeMap[mapPos.x, mapPos.y] == tileType) return; 
 
         // update map
-        map[mapPos.x, mapPos.y] = tileType;
+        tileTypeMap[mapPos.x, mapPos.y] = tileType;
         
         // update visual
-        mapVisualizer.SetTile(mapPos, tileType);
+        MapVisualizer.Instance.SetTile(mapPos, tileType);
          
     }
 
@@ -335,6 +346,61 @@ public class MapBuilder : MonoBehaviour
     {
         Vector3 cellPos = new Vector3((mapPos.x + tilemapOffset.x) * cellSize, 0, (mapPos.y + tilemapOffset.y) * cellSize);
         return cellPos;
+    }
+
+    private TileTypeWalkable[,] CalculateMinkowskiSum(){
+        //Calculate the Minkowski sum of the map
+
+        // get width & height
+        int mapWidth = tileTypeMap.GetLength(0);
+        int mapHeight = tileTypeMap.GetLength(1);
+
+        // init the Minkowski map
+        TileTypeWalkable[,] minkowskiMap = new TileTypeWalkable[mapWidth, mapHeight];
+        for (int x = 0; x < mapWidth; x++)
+        {
+            for (int z = 0; z < mapWidth; z++)
+            {
+                if (tileTypeMap[x, z] == MapBuilder.TileType.Explored)
+                {
+                    minkowskiMap[x, z] = TileTypeWalkable.Walkable;
+                }
+                else
+                {
+                    minkowskiMap[x, z] = TileTypeWalkable.NotWalkable;
+                }
+            }
+        }
+
+        //Calculate the Minkowski sum
+        for (int x = 0; x < mapWidth; x++)
+        {
+            for (int z = 0; z < mapWidth; z++)
+            {
+                if (wallConfidenceMap[x, z] > 0.5f)
+                {
+                    // check surroundings in circle using carRadiusInCell
+                    for (int i = -carRadiusInCell; i <= carRadiusInCell; i++)
+                    {
+                        for (int j = -carRadiusInCell; j <= carRadiusInCell; j++)
+                        {
+                            if (x + i >= 0 && x + i < mapWidth
+                                && z + j >= 0 && z + j < mapHeight
+                                && (i * i + j * j) <= (carRadiusInCell * carRadiusInCell)
+                                )
+                            {
+                                if (minkowskiMap[x + i, z + j] == TileTypeWalkable.Walkable)
+                                {
+                                    minkowskiMap[x + i, z + j] = TileTypeWalkable.NotWalkable;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return minkowskiMap;
     }
 
 }

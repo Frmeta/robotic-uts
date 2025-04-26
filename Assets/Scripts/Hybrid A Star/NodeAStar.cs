@@ -8,7 +8,7 @@ public class NodeAStar : IHeapItem<NodeAStar>
     //The cost to this node
     public float cost;
 
-    public Vector2 position;
+    public Vector2Int position;
     //The direction in radians
 
     //The index this node has in the heap, to make sorting nodes faster
@@ -21,7 +21,7 @@ public class NodeAStar : IHeapItem<NodeAStar>
     }
 
 
-    public NodeAStar(Vector2 position, float cost)
+    public NodeAStar(Vector2Int position, float cost)
     {
         this.position = position;
         this.cost = cost;

@@ -5,9 +5,31 @@ using UnityEngine;
 
 public class AStar : MonoBehaviour
 {
-    
-    public static float[,] CalculateCostToGoal(HybridAStar.TileTypeWalkable[,] walkableMap, Vector2Int startPosition)
+    // singleton
+    private static AStar instance = null;
+    public static AStar Instance
     {
+        get
+        {
+            if (instance == null)
+            {
+                instance = new AStar();
+            }
+            return instance;
+        }
+    }
+
+    public float[,] CalculateCostToGoal(MapBuilder.TileTypeWalkable[,] walkableMap, Vector2Int startPosition)
+    {
+        /* 
+        accepts:
+            walkableMap : 2D array of {Walkable, NotWalkable}
+            startPosition : the starting position of the pathfinding algorithm
+
+        returns:
+            costToGoal : 2D array of the cost to each tile in the map
+        */ 
+
         // init costToGoal
         float[,] costToGoal = new float[walkableMap.GetLength(0), walkableMap.GetLength(1)];
         for (int x = 0; x < walkableMap.GetLength(0); x++)
@@ -28,16 +50,24 @@ public class AStar : MonoBehaviour
 
         while (openNodes.Count > 0)
         {
+            // pop from heap
             NodeAStar currentNode = openNodes.RemoveFirst();
 
-            // Get neighbors and calculate costs
-            foreach (Vector2Int neighbor in GetNeighbors(currentNode.position, walkableMap))
+            // Get neighbors (must inside the map))
+            foreach (var neighborTuple in GetNeighbors(currentNode.position, walkableMap))
             {
-                if (walkableMap[neighbor.x, neighbor.y] == HybridAStar.TileTypeWalkable.Walkable)
+                Vector2Int neighbor = neighborTuple.Item1;
+                
+                // if the neighbor is walkable
+                if (walkableMap[neighbor.x, neighbor.y] == MapBuilder.TileTypeWalkable.Walkable)
                 {
-                    float newCost = currentNode.cost + CalculateCost(currentNode.position, neighbor);
+                    // calculate the cost to the neighbor
+                    float newCost = (float)(currentNode.cost + neighborTuple.Item2);
+
+                    // if newCost is less than the current cost to the neighbor
                     if (newCost < costToGoal[neighbor.x, neighbor.y])
                     {
+                        // update the cost to the neighbor and add it to the open nodes
                         costToGoal[neighbor.x, neighbor.y] = newCost;
                         NodeAStar neighborNode = new NodeAStar(neighbor, newCost);
                         openNodes.Add(neighborNode);
@@ -46,16 +76,15 @@ public class AStar : MonoBehaviour
             }
         }
 
-
-
         // Calculate the cost to the goal using the heuristic function
         // This is a placeholder implementation and should be replaced with a proper heuristic calculation
         return costToGoal;
     }
 
-    private static Set GetNeighbors(Vector2Int position, HybridAStar.TileTypeWalkable[,] walkableMap)
+    private List<Tuple<Vector2Int, double>> GetNeighbors(Vector2Int position, MapBuilder.TileTypeWalkable[,] walkableMap)
     {
-        List<Vector2Int> neighbors = new List<Vector2Int>();
+        // returns List of tuple (neighbors position, cost)
+        List<Tuple<Vector2Int, double>> neighbors = new List<Tuple<Vector2Int, double>>();
 
         int width = walkableMap.GetLength(0);
         int height = walkableMap.GetLength(1);
@@ -67,11 +96,25 @@ public class AStar : MonoBehaviour
             Vector2Int neighborPos = position + direction;
             if (neighborPos.x >= 0 && neighborPos.x < width && neighborPos.y >= 0 && neighborPos.y < height)
             {
-                Tuple.Create(neighborNode, costAdded);
-                neighbors.Add(neighborPos);
+                neighbors.Add(Tuple.Create(neighborPos, 1d));
             }
         }
 
-        return neighbors.ToArray();
+        Vector2Int[] directionsDiagonal = { 
+            Vector2Int.down + Vector2Int.left, 
+            Vector2Int.down + Vector2Int.right,
+            Vector2Int.up + Vector2Int.left, 
+            Vector2Int.up + Vector2Int.right };
+
+        foreach (Vector2Int direction in directionsDiagonal)
+        {
+            Vector2Int neighborPos = position + direction;
+            if (neighborPos.x >= 0 && neighborPos.x < width && neighborPos.y >= 0 && neighborPos.y < height)
+            {
+                neighbors.Add(Tuple.Create(neighborPos, Math.Sqrt(2))); // Diagonal movement cost is sqrt(2)
+            }
+        }
+
+        return neighbors;
     }
 }

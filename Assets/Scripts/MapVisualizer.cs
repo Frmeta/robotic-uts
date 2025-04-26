@@ -21,14 +21,28 @@ public class MapVisualizer : MonoBehaviour
 
     private Texture2D minimapTexture;
 
+    // singleton
+    public static MapVisualizer instance = null;
+    public static MapVisualizer Instance
+    {
+        get
+        {
+            if (instance == null) 
+            {
+                instance = new MapVisualizer();
+            }
+            return instance;
+        }
+    }
+
     // Start is called before the first frame update
     void Start()
     {
-        minimapTexture = new Texture2D(mapBuilder.map.GetLength(0), mapBuilder.map.GetLength(1), TextureFormat.RGBA32, false);
+        minimapTexture = new Texture2D(mapBuilder.tileTypeMap.GetLength(0), mapBuilder.tileTypeMap.GetLength(1), TextureFormat.RGBA32, false);
         minimapTexture.filterMode = FilterMode.Point;
         minimapTexture.wrapMode = TextureWrapMode.Repeat;
         minimapRawImage.texture = minimapTexture;
-        minimapRawImage.rectTransform.sizeDelta = new Vector2(mapBuilder.map.GetLength(0), mapBuilder.map.GetLength(1));
+        minimapRawImage.rectTransform.sizeDelta = new Vector2(mapBuilder.tileTypeMap.GetLength(0), mapBuilder.tileTypeMap.GetLength(1));
 
     }
 
@@ -39,7 +53,7 @@ public class MapVisualizer : MonoBehaviour
         if (objectToFollow != null)
         {
             Vector3 diff = objectToFollow.transform.position -
-                mapBuilder.MapToWorld( new Vector2Int(mapBuilder.map.GetLength(0) / 2, mapBuilder.map.GetLength(1) / 2));
+                mapBuilder.MapToWorld( new Vector2Int(mapBuilder.tileTypeMap.GetLength(0) / 2, mapBuilder.tileTypeMap.GetLength(1) / 2));
             Vector2 diff2 = new Vector2(diff.x, diff.z);
             Vector3 newPos = new Vector3(-diff2.x, - diff2.y, 0);
             minimapRawImage.rectTransform.anchoredPosition = newPos/mapBuilder.cellSize;
@@ -72,6 +86,7 @@ public class MapVisualizer : MonoBehaviour
         tilemap.SetTileFlags(cellPosForTilemap, TileFlags.None);
         if (tileType == MapBuilder.TileType.Unexplored)
         {
+            // unexplored tiles
             tilemap.SetTile(cellPosForTilemap, null);
             minimapTexture.SetPixel(cellPosForTilemap.x, cellPosForTilemap.y, unexploredColor);
         }
@@ -80,6 +95,7 @@ public class MapVisualizer : MonoBehaviour
             tilemap.SetTile(cellPosForTilemap, whiteTile);
             if (tileType == MapBuilder.TileType.Explored)
             {
+                // explored tiles
                 // lerp between wallConfidence green to red
                 Color lerpedColor = Color.Lerp(walkableColor, obstacleColor, mapBuilder.wallConfidenceMap[mapPos.x, mapPos.y]);
                 Debug.Log("color: " + lerpedColor + " wallConfidence: " + mapBuilder.wallConfidenceMap[mapPos.x, mapPos.y]);
@@ -88,6 +104,7 @@ public class MapVisualizer : MonoBehaviour
                 
             } else if (tileType == MapBuilder.TileType.Frontier)
             {
+                // frontier tiles
                 tilemap.SetColor(cellPosForTilemap, frontierColor);
                 minimapTexture.SetPixel(mapPos.x, mapPos.y, frontierColor);
             }
