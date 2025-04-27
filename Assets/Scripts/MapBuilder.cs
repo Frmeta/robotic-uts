@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data.Common;
 using Unity.VisualScripting;
 using UnityEngine;
+using UnityEngine.Assertions;
 using UnityEngine.Events;
 using UnityEngine.Tilemaps;
 
@@ -12,6 +13,7 @@ public class MapBuilder : MonoBehaviour
     // inputs
 
     [Header("Lidar settings")]
+    public bool isDebugLidar;
     public Transform lidarTransform;
     public int numberOfRays = 32;
     public float rayLength = 5;
@@ -30,6 +32,9 @@ public class MapBuilder : MonoBehaviour
 
 
 
+    public GameObject bestTargetDebug;
+
+
     // temporary variables
     
     public enum TileType { Unexplored, Frontier, Explored };
@@ -37,18 +42,23 @@ public class MapBuilder : MonoBehaviour
     [HideInInspector] public TileType[,] tileTypeMap;
     [HideInInspector] public float[,] wallConfidenceMap;
     [HideInInspector] public TileTypeWalkable[,] walkableMap;
-    [HideInInspector] public float[,] aStarMap;
+    [HideInInspector] public float[,] aStarPlayerMap;
+    [HideInInspector] public float[,] aStarTargetMap;
     [HideInInspector] private int[,] lidarCountMap;
     [HideInInspector] public Vector2Int tilemapOffset;
 
-    private List<Vector2Int> frontierTiles = new List<Vector2Int>();
+    [HideInInspector] public List<Vector2Int> frontierTiles = new List<Vector2Int>();
 
     private Vector2Int[] neighbors = new Vector2Int[]
             {
                 new Vector2Int(1, 0),
                 new Vector2Int(-1, 0),
                 new Vector2Int(0, 1),
-                new Vector2Int(0, -1)
+                new Vector2Int(0, -1),
+                new Vector2Int(1, 1),
+                new Vector2Int(-1, 1),
+                new Vector2Int(1, -1),
+                new Vector2Int(-1, -1)
             };
 
     private float lidarNeededDistance = 0;
@@ -76,6 +86,7 @@ public class MapBuilder : MonoBehaviour
             lineRenderers[i].positionCount = 2;
             lineRenderers[i].transform.parent = transform;
             lineRenderers[i].material = lineMaterial;
+            lineRenderers[i].gameObject.SetActive(isDebugLidar);
         }
 
         // init required size
@@ -103,6 +114,12 @@ public class MapBuilder : MonoBehaviour
             }
         }
         Debug.Log("Map size: " + tileTypeMap.GetLength(0) + "x" + tileTypeMap.GetLength(1) + " cells, " + (tileTypeMap.GetLength(0) * tileTypeMap.GetLength(1)) + " cells total.");
+        
+    }
+
+    void Start()
+    {
+        Lidar();
     }
 
     void Update()
@@ -114,10 +131,8 @@ public class MapBuilder : MonoBehaviour
             lidarNeededDistance = lidarIntervalDistance;
             Lidar();
 
-            // calculate walkable map
-            TileTypeWalkable[,] walkableMap = CalculateMinkowskiSum();
-            aStarMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(transform.position));
-            MapVisualizer.instance.UpdateAStarMap(walkableMap, aStarMap);
+            
+            UpdateWalkableMap();
         }
     }
 
@@ -261,32 +276,84 @@ public class MapBuilder : MonoBehaviour
          
     }
 
-    public List<Node> getPathToBestTarget(){
-        /// get best target (frontier)
-        Vector3 bestTarget = getBestTarget();
-        Debug.Log("Best target: " + bestTarget.ToString());
+    public IEnumerator getPathToBestTarget(System.Action<List<Node>> callback){
 
-        return HybridAStar.Instance.GeneratePath(
+
+        UpdateWalkableMap();
+
+        // calculate map
+        Vector2Int bestTargetInCell;
+        Vector3 bestTargetInWorld;
+
+        if (CarController.instance.isBestTargetManual){
+            // manual by player
+            bestTargetInWorld = bestTargetDebug.transform.position;
+            bestTargetInCell = WorldToMap(bestTargetInWorld);
+        } else {
+            // find frontier
+            aStarPlayerMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(transform.position));
+            Assert.IsNotNull(aStarPlayerMap);
+            MapVisualizer.instance.UpdateAStarPlayerMap(aStarPlayerMap);
+
+            
+            /// get best target (frontier)
+            bestTargetInCell = getBestTargetInCell();
+            if (bestTargetInCell == Vector2Int.zero){
+                // entah kenapa best target jika fail
+                Debug.Log("Best Target Finding Failed");
+                callback(null);
+                yield break;
+            }
+            bestTargetInWorld = MapToWorld(bestTargetInCell);
+        }
+        
+
+        // Debug
+        Debug.Log("Best target: " + bestTargetInCell.ToString());
+        bestTargetDebug.transform.position = bestTargetInWorld;
+        if (walkableMap[bestTargetInCell.x, bestTargetInCell.y] != TileTypeWalkable.Walkable){
+            Debug.Log("Best Target Finding Failed: walkable");
+            callback(null);
+            yield break;
+        }
+
+        // calculate A* from target
+        aStarTargetMap = AStar.Instance.CalculateCostToGoal(walkableMap, bestTargetInCell);
+
+        // update the map
+        Assert.IsNotNull(aStarTargetMap);
+        MapVisualizer.instance.UpdateAStarTargetMap(aStarTargetMap);
+
+
+        StartCoroutine(HybridAStar.instance.GeneratePath(
             transform.position,
-            transform.rotation.y * Mathf.Deg2Rad,
-            bestTarget,
+            Mathf.PI/2 - transform.eulerAngles.y * Mathf.Deg2Rad,
+            bestTargetInWorld,
             walkableMap,
-            aStarMap,
-            wallConfidenceMap,
-            false,
-            CarController.instance.wheelBase
-            );
+            aStarTargetMap,
+            CarController.instance.wheelBase,
+            callback
+            ));
     }
 
-    private Vector3 getBestTarget(){
-        Debug.Log("get best target");
-        // find clusters
+    private void UpdateWalkableMap(){
+        walkableMap = CalculateMinkowskiSum();
+        MapVisualizer.instance.UpdateWalkableMap(walkableMap);
+    }
+
+    private Vector2Int getBestTargetInCell(){
+        if (frontierTiles.Count == 0){
+            return Vector2Int.zero;
+        }
+
+        // group per clusters
         List<List<Vector2Int>> clusters = new List<List<Vector2Int>>();
         List<Vector2Int> visited = new List<Vector2Int>();
         foreach (Vector2Int tile in frontierTiles)
         {
             if (!visited.Contains(tile))
             {
+                // apply BFS
                 List<Vector2Int> cluster = new List<Vector2Int>();
                 Queue<Vector2Int> queue = new Queue<Vector2Int>();
                 queue.Enqueue(tile);
@@ -298,13 +365,6 @@ public class MapBuilder : MonoBehaviour
                         visited.Add(current);
                         cluster.Add(current);
                         // check neighbors
-                        Vector2Int[] neighbors = new Vector2Int[]
-                        {
-                            new Vector2Int(1, 0),
-                            new Vector2Int(-1, 0),
-                            new Vector2Int(0, 1),
-                            new Vector2Int(0, -1)
-                        };
                         foreach (Vector2Int neighbor in neighbors)
                         {
                             Vector2Int neighborPosition = current + neighbor;
@@ -315,47 +375,57 @@ public class MapBuilder : MonoBehaviour
                         }
                     }
                 }
+                Assert.IsTrue(cluster.Count > 0);
                 clusters.Add(cluster);
             }
         }
+        Assert.IsTrue(clusters.Count > 0);
 
-        Debug.Log("get best target2");
         // find 'best' cluster
-        List<Vector2Int> bestCluster = null;
-        float bestClusterScore = 0;
+        List<Vector2Int> bestCluster = clusters[0];
+        float bestClusterScore = float.MinValue;
         foreach (List<Vector2Int> cluster in clusters)
         {
-            Vector2Int center = new Vector2Int(0, 0);
+            // find representative point
+            float highScore2 = float.MinValue;
+            Vector2Int highScoreHolder2 = cluster[0];
             foreach (Vector2Int tile in cluster)
             {
-                center += tile;
+                // score = A* distance + angle difference
+                Assert.IsNotNull(aStarPlayerMap);
+                float score2 = - aStarPlayerMap[tile.x, tile.y] - Vector2.Angle(WorldToMap(transform.position), tile) / 360f * 50f;
+                if (score2 > highScore2){
+                    highScore2 = score2;
+                    highScoreHolder2 = tile;
+                }
             }
-            center /= cluster.Count;
-            float distance = Vector2.Distance(center, transform.position);
-            float score = cluster.Count*5 - distance; // score counting
-            if (score > bestClusterScore)
+
+            float clusterScore = cluster.Count*5 + highScore2; // score counting
+            if (clusterScore > bestClusterScore)
             {
-                bestClusterScore = score;
+                bestClusterScore = clusterScore;
                 bestCluster = cluster;
+            } else {
+                //Debug.Log(clusterScore + " is less than " + bestClusterScore);
             }
         }
         
-        Debug.Log("get best target3");
+        Assert.IsNotNull(bestCluster);
+        Assert.IsTrue(bestCluster.Count > 0);
 
         // find the closest tile to player using aStar
-        float highScore = aStarMap[bestCluster[0].x, bestCluster[0].y];
+        float highScore = float.MinValue;
         Vector2Int highScoreHolder = bestCluster[0];
         foreach (Vector2Int tile in bestCluster)
         {
-            float score = aStarMap[tile.x, tile.y];
-            if (score < highScore) {
+            float score = - aStarPlayerMap[tile.x, tile.y] - Mathf.Sin(Vector2.Angle(WorldToMap(transform.position), tile)) / 360f * 50f;
+            if (score > highScore) {
                 highScore = score;
                 highScoreHolder = tile;
             } 
         }
-        Debug.Log("done best target");
         // return world pos
-        return MapToWorld(highScoreHolder);
+        return highScoreHolder;
     }
 
     public Vector2Int WorldToMap(Vector3 worldPos)
@@ -366,7 +436,7 @@ public class MapBuilder : MonoBehaviour
     }
     public Vector3 MapToWorld(Vector2Int mapPos)
     {
-        Vector3 cellPos = new Vector3((mapPos.x + tilemapOffset.x) * cellSize, 0, (mapPos.y + tilemapOffset.y) * cellSize);
+        Vector3 cellPos = new Vector3((mapPos.x + tilemapOffset.x) * cellSize, transform.position.y, (mapPos.y + tilemapOffset.y) * cellSize);
         return cellPos;
     }
 

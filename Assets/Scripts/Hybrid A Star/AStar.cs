@@ -68,7 +68,7 @@ public class AStar
                     float newCost = (float)(currentNode.cost + neighborTuple.Item2);
 
                     // if newCost is less than the current cost to the neighbor
-                    if (!isVisitedMap[currentNode.position.x, currentNode.position.y] && newCost < costToGoal[neighbor.x, neighbor.y])
+                    if (!isVisitedMap[neighbor.x, neighbor.y] && newCost < costToGoal[neighbor.x, neighbor.y])
                     {
                         // update the cost to the neighbor and add it to the open nodes
                         costToGoal[neighbor.x, neighbor.y] = newCost;
@@ -103,6 +103,7 @@ public class AStar
             }
         }
 
+        // for diagonal, sqrt(2)
         Vector2Int[] directionsDiagonal = { 
             Vector2Int.down + Vector2Int.left, 
             Vector2Int.down + Vector2Int.right,

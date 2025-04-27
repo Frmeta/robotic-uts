@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Security.Cryptography.X509Certificates;
+using UnityEditor.Experimental;
 using UnityEditor.UI;
 using UnityEngine;
 using UnityEngine.Assertions;
@@ -13,12 +14,12 @@ public enum DriveType
 }
 public enum State
 {
-    Stop, Exploring, GoToBomb
+    NeedPath, WaitingForPath, Exploring, GoToBomb, PermanentStop
 }
 public class CarController : MonoBehaviour
 {
     public DriveType driveType = DriveType.Manual;
-    public State state = State.Stop;
+    public State state = State.NeedPath;
 
     [Header("Wheel Reference")]
     public WheelCollider leftFrontWheel;
@@ -35,7 +36,6 @@ public class CarController : MonoBehaviour
     public float acceleration = 10f;
     public float maxSteerAngle = 30f;
     public float brakeAcceleration = 10f;
-    public float goToNodeAccuracy = 0.2f;
     
 
 
@@ -60,8 +60,14 @@ public class CarController : MonoBehaviour
     private float inputSteerAngle;
     private float inputBrakeAcceleration;
 
+    [Header("Automatic Settings")]
+    public float maxSpeed = 3f;
+
     [Header("Other")]
     public GameObject bolaBiru;
+    public GameObject bolaBiruBesar;
+    public bool isBestTargetManual;
+    public float goToNodeAccuracy = 0.2f;
 
     
     // temporary variables
@@ -91,8 +97,9 @@ public class CarController : MonoBehaviour
     }
 
     // Update is called once per frame
-    void FixedUpdate()
+    void Update()
     {
+        
         switch (driveType)
         {
             case DriveType.Manual:
@@ -100,51 +107,77 @@ public class CarController : MonoBehaviour
                 inputForward = Input.GetAxis("Vertical");
                 inputSteerAngle = Input.GetAxis("Horizontal");
                 inputBrakeAcceleration = Input.GetKey(KeyCode.Space) ? 1 : 0;
+
+                if (Input.GetKeyDown(KeyCode.Q)){
+                    GoHybridAStar();
+                }
                 break;
 
             case DriveType.Automatic:
-                //TODO
-                if (state == State.Stop){
-                    Debug.Log("starting hybrid A*");
-                    state = State.Exploring;
-                    List<Node> nodes = MapBuilder.instance.getPathToBestTarget();
-                    Debug.Log("Succesfully created path with length: " + nodes.Count.ToString());
-                    nodesEnumerator = nodes.GetEnumerator();
-
-                    // remove existing nodesDebug
-                    foreach (GameObject u in nodesDebug){
-                        Destroy(u);
-                    }
-                    nodesDebug.Clear();
-
-                    // add new nodesDebug
-                    foreach (Node node in nodes){
-                        Debug.Log("bola biruuu");
-                        GameObject bolaBiruu = Instantiate(bolaBiru,
-                            new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.y),
-                            Quaternion.identity);
-                        nodesDebug.Add(bolaBiru);
-                    }
-
+                if (state == State.NeedPath){
+                    inputBrakeAcceleration = 0.2f;
+                    GoHybridAStar();
+                    state = State.WaitingForPath;
                 } else if (state == State.Exploring){
+                    
+                    Node node = nodesEnumerator.Current;
+                    if (node == null){
+                        Debug.Log("node null??");
+                        state = State.NeedPath;
+                        break;
+                    }
+                    Vector2 myPos = new Vector2(transform.position.x, transform.position.z);
+                    Vector2 nodePos = new Vector2(node.worldPosition.x, node.worldPosition.z);
+
+                    // following node
+                    bolaBiruBesar.transform.position = new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.z);
+
+                    // gas
+                    float avgSpeed = (leftFrontWheel.rotationSpeed + rightFrontWheel.rotationSpeed)/2;
+                    inputForward = (avgSpeed > maxSpeed || avgSpeed < -maxSpeed) ? 0 : (node.isReversing ? -1 : 1);
+
+                    // steer
+                    
+                    Vector2 diff = (nodePos - myPos).normalized;
+
+                    float myAngle = (90f - transform.eulerAngles.y) * Mathf.Deg2Rad;
+                    Vector2 myDir = new Vector2(Mathf.Cos(myAngle), Mathf.Sin(myAngle));
+
+                    float crossProduct = myDir.x * diff.y - myDir.y * diff.x;
+                    float noSteer = 0.01f;
+                    float maxSteer = 0.1f;
+                    if (Mathf.Abs(crossProduct) < noSteer){
+                        // no difference
+                        inputSteerAngle = 0;
+                    } else {
+                        // belok
+                        inputSteerAngle = -Mathf.Sign(crossProduct) * Mathf.Clamp((Mathf.Abs(crossProduct)-noSteer)/(maxSteer - noSteer), 0, 1);
+                    }
+
+                    // brake
+                    inputBrakeAcceleration = 0;
+
 
                     // if near nextNode
-                    if (Vector2.Distance(
-                            nodesEnumerator.Current.worldPosition,
-                            new Vector2(transform.position.x, transform.position.z)
-                        ) 
-                        < goToNodeAccuracy
-                    ){
+                    if (nodesEnumerator.Current == null ||
+                    Vector2.Distance(nodePos, myPos) < goToNodeAccuracy ||
+                    (node.isReversing && Vector2.Distance(nodePos, myPos) < goToNodeAccuracy*4)){
                         bool hasNext = nodesEnumerator.MoveNext();
                         if (!hasNext){
-                            state = State.Stop;
+                            Debug.Log("sampe");
+                            inputBrakeAcceleration = 1;
+                            state = State.NeedPath;
+                        }
+                        // if node is not walkable (maybe htere's wall revealed nearby)
+                        Vector2Int nodeCell = MapBuilder.instance.WorldToMap(nodesEnumerator.Current.worldPosition);
+                        if (MapBuilder.instance.walkableMap[nodeCell.x, nodeCell.y] == MapBuilder.TileTypeWalkable.NotWalkable){
+                            Debug.Log("path canceled");
+                            inputBrakeAcceleration = 1;
+                            state = State.NeedPath;
                         }
                     }
 
-                    // float speedScale = 0.5f;
-                    // inputForward = nodesEnumerator.Current.isReversing ? speedScale : -speedScale;
-                    // inputSteerAngle = ;
-                    // inputBrakeAcceleration = Input.GetKey(KeyCode.Space) ? 1 : 0;
+                    
                     
                 }
                 
@@ -223,6 +256,43 @@ public class CarController : MonoBehaviour
         // Average the two estimations
         Vector3 averageEstimation = (triangulationLocationVisualizer.position + intertiaLocationVisualizer.position) / 2f;
         averageLocationVisualizer.position = new Vector3(averageEstimation.x, averageLocationVisualizer.position.y, averageEstimation.z);
+    }
+
+    private void GoHybridAStar(){
+        Debug.Log("starting hybrid A*");
+        StartCoroutine(mapBuilder.getPathToBestTarget((nodes) => AfterHybridAStar(nodes)));
+        
+    }
+    private void AfterHybridAStar(List<Node> nodes){
+        if (nodes != null && nodes.Count>0){
+            state = State.Exploring;
+
+            nodesEnumerator = nodes.GetEnumerator();
+            nodesEnumerator.MoveNext();
+
+            // remove existing nodesDebug
+            foreach (GameObject u in nodesDebug){
+                Destroy(u);
+            }
+            nodesDebug.Clear();
+
+            // add new nodesDebug
+            foreach (Node node in nodes){
+                GameObject bolaBiruu = Instantiate(bolaBiru,
+                    new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.z),
+                    Quaternion.identity);
+                nodesDebug.Add(bolaBiruu);
+            }
+        } else {
+            Debug.LogWarning("Path failed");
+            state = State.PermanentStop;
+            StartCoroutine(Recovering());
+        }
+    }
+
+    private IEnumerator Recovering(){
+        yield return new WaitForSeconds(1);
+        state = State.NeedPath;
     }
     
     private Vector3? Triangulate3D(Vector3 pos1, Vector3 pos2, Vector3 pos3, float dist1, float dist2, float dist3){

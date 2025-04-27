@@ -6,7 +6,7 @@ using System;
 public class Node : IHeapItem<Node>
 {
 
-    public Vector2 worldPosition;
+    public Vector3 worldPosition;
     //The direction in radians
     public float direction;
     //Is the car reversing when traveling to this node?
@@ -25,16 +25,18 @@ public class Node : IHeapItem<Node>
 
     //The index this node has in the heap, to make sorting nodes faster
     private int heapIndex;
+    public int countdownBeforeCanTurn;
 
 
-    public Node(Node previousNode, Vector2 position, float direction, bool isReversing, float costStartToNode, float costHeuristicNodeToEnd)
+    public Node(Node previousNode, Vector3 worldPosition, float direction, bool isReversing, float costStartToNode, float costHeuristicNodeToEnd, int countdownBeforeCanTurn)
     {
         this.previousNode = previousNode;
-        this.worldPosition = position;
+        this.worldPosition = worldPosition;
         this.direction = direction;
         this.isReversing = isReversing;
         this.costStartToNode = costStartToNode;
         this.costHeuristicNodeToEnd = costHeuristicNodeToEnd;
+        this.countdownBeforeCanTurn = countdownBeforeCanTurn;
     }
 
     //The heap requires that we implement this

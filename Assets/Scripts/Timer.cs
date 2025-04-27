@@ -2,9 +2,11 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
+using UnityEngine.UI;
 
 public class Timer : MonoBehaviour
 {
+    public Scrollbar timeMultipliercrollbar;
     public TMP_Text timerText;
     public float currTime = 0f;
 
@@ -19,6 +21,10 @@ public class Timer : MonoBehaviour
     }
 
     void Start(){
+        timeMultipliercrollbar.onValueChanged.AddListener( (value) =>{
+            Time.timeScale = Mathf.Lerp(0.2f, 15f, value);
+        }   
+        );
         StartCoroutine(StartTimer());
     }
 
