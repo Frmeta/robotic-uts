@@ -79,6 +79,7 @@ public class MapVisualizer : MonoBehaviour
         // follow object (in this case, the car)
         if (objectToFollow != null)
         {
+            // boleh menggunakan transform.position karena hanya untuk minimap for debugging
             Vector3 diff = objectToFollow.transform.position -
                 mapBuilder.MapToWorld( new Vector2Int(mapWidth / 2, mapHeight / 2));
             Vector2 diff2 = new Vector2(diff.x, diff.z);
@@ -162,7 +163,7 @@ public class MapVisualizer : MonoBehaviour
             for (int y = 0; y < mapHeight; y++)
             {
                 // a* minimap
-                Color color = Color.Lerp(Color.white, Color.black, costMap[x, y]/50f);
+                Color color = Color.Lerp(Color.white, Color.black, costMap[x, y]/80f);
                 aStarPlayerMinimap.minimapTexture.SetPixel(x, y, color);
             }
         }
@@ -175,7 +176,7 @@ public class MapVisualizer : MonoBehaviour
             for (int y = 0; y < mapHeight; y++)
             {
                 // a* minimap
-                Color color = Color.Lerp(Color.white, Color.black, costMap[x, y]/50f);
+                Color color = Color.Lerp(Color.white, Color.black, costMap[x, y]/80f);
                 aStarTargetMinimap.minimapTexture.SetPixel(x, y, color);
             }
         }

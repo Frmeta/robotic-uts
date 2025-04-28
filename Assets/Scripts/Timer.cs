@@ -8,6 +8,7 @@ public class Timer : MonoBehaviour
 {
     public Scrollbar timeMultipliercrollbar;
     public TMP_Text timerText;
+    public TMP_Text speedText;
     public float currTime = 0f;
 
     public static Timer instance;
@@ -18,11 +19,13 @@ public class Timer : MonoBehaviour
         } else {
             Destroy(gameObject);
         }
+        
     }
 
     void Start(){
         timeMultipliercrollbar.onValueChanged.AddListener( (value) =>{
             Time.timeScale = Mathf.Lerp(0.2f, 15f, value);
+            speedText.text = "Speed: " + Mathf.Round(Time.timeScale * 100) / 100f + "X";
         }   
         );
         StartCoroutine(StartTimer());

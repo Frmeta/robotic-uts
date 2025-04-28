@@ -19,6 +19,7 @@ public class Node : IHeapItem<Node>
         }
     }
     public bool isReversing;
+    public bool isChangingDirection;
 
     //The node we took to get here so we can get the final path
     public Node previousNode;
@@ -28,7 +29,7 @@ public class Node : IHeapItem<Node>
     public int countdownBeforeCanTurn;
 
 
-    public Node(Node previousNode, Vector3 worldPosition, float direction, bool isReversing, float costStartToNode, float costHeuristicNodeToEnd, int countdownBeforeCanTurn)
+    public Node(Node previousNode, Vector3 worldPosition, float direction, bool isReversing, float costStartToNode, float costHeuristicNodeToEnd, int countdownBeforeCanTurn, bool isChangingDirection)
     {
         this.previousNode = previousNode;
         this.worldPosition = worldPosition;
@@ -37,6 +38,7 @@ public class Node : IHeapItem<Node>
         this.costStartToNode = costStartToNode;
         this.costHeuristicNodeToEnd = costHeuristicNodeToEnd;
         this.countdownBeforeCanTurn = countdownBeforeCanTurn;
+        this.isChangingDirection = isChangingDirection;
     }
 
     //The heap requires that we implement this

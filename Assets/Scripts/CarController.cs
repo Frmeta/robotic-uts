@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Security.Cryptography.X509Certificates;
+using Unity.VisualScripting;
 using UnityEditor.Experimental;
 using UnityEditor.UI;
 using UnityEngine;
@@ -14,7 +15,7 @@ public enum DriveType
 }
 public enum State
 {
-    NeedPath, WaitingForPath, Exploring, GoToBomb, PermanentStop
+    NeedPath, WaitingForPath, Exploring, GoToBomb, PermanentStop, PanicMode
 }
 public class CarController : MonoBehaviour
 {
@@ -62,25 +63,35 @@ public class CarController : MonoBehaviour
 
     [Header("Automatic Settings")]
     public float maxSpeed = 3f;
+    public double timeNotReachingNextNodeForRecovery = 8f;
 
     [Header("Other")]
     public GameObject bolaBiru;
     public GameObject bolaBiruBesar;
     public bool isBestTargetManual;
-    public float goToNodeAccuracy = 0.2f;
+    public float goToNodeAccuracy = 1;
+    public float goToNodePreciseAccuracy = 0.3f;
+    public int recoveryCountBeforePanic = 3;
+
 
     
     // temporary variables
     private float currentAcceleration;
     private float currentSteerAngle;
     private float currentBrakeAcceleration;
-    private List<Node>.Enumerator nodesEnumerator;
+    private List<Node> nodes;
+    private int nodeIndex;
     private List<GameObject> nodesDebug = new List<GameObject>();
+    private double timerForReachingNextNode;
+    [HideInInspector] public Vector3 approximatedPosition;
+
+    private int recoveryCount = 0;
+    private bool lastPanicIsForward;
+
 
     public static CarController instance;
-    // hint: motorTorque, steerAngle, brakeTorque
-    // Start is called before the first frame update
-    void Start()
+
+    void Awake()
     {
         if (instance == null){
             instance = this;
@@ -88,18 +99,27 @@ public class CarController : MonoBehaviour
         rb = GetComponent<Rigidbody>();
         mapBuilder = GetComponent<MapBuilder>();
 
-        x_inertia = transform.position.x;
+        x_inertia = transform.position.x; // boleh untuk odometri, hanya dipakai pada saat Start()
         z_inertia = transform.position.z;
         theta_inertia = transform.rotation.eulerAngles.y * Mathf.Deg2Rad;
         Assert.IsTrue(landmarks.Length == 3, "There should be exactly 3 landmarks for triangulation.");
         Assert.IsTrue(landmarks[0] != null && landmarks[1] != null && landmarks[2] != null, "Landmarks should not be null.");
-        
+        approximatedPosition = ApproximateLocation();
     }
 
     // Update is called once per frame
     void Update()
     {
+        timerForReachingNextNode -= Time.deltaTime;
         
+       
+        approximatedPosition = ApproximateLocation();
+
+        if (Input.GetKeyDown(KeyCode.Q)){
+            GoHybridAStar();
+        }
+
+
         switch (driveType)
         {
             case DriveType.Manual:
@@ -107,30 +127,25 @@ public class CarController : MonoBehaviour
                 inputForward = Input.GetAxis("Vertical");
                 inputSteerAngle = Input.GetAxis("Horizontal");
                 inputBrakeAcceleration = Input.GetKey(KeyCode.Space) ? 1 : 0;
-
-                if (Input.GetKeyDown(KeyCode.Q)){
-                    GoHybridAStar();
-                }
                 break;
 
             case DriveType.Automatic:
                 if (state == State.NeedPath){
-                    inputBrakeAcceleration = 0.2f;
+                    inputBrakeAcceleration = 1f;
                     GoHybridAStar();
-                    state = State.WaitingForPath;
                 } else if (state == State.Exploring){
                     
-                    Node node = nodesEnumerator.Current;
+                    Node node = nodes[nodeIndex];
                     if (node == null){
                         Debug.Log("node null??");
-                        state = State.NeedPath;
+                        StartCoroutine(Recovering());
                         break;
                     }
-                    Vector2 myPos = new Vector2(transform.position.x, transform.position.z);
+                    Vector2 myPos = new Vector2(approximatedPosition.x, approximatedPosition.z);
                     Vector2 nodePos = new Vector2(node.worldPosition.x, node.worldPosition.z);
 
                     // following node
-                    bolaBiruBesar.transform.position = new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.z);
+                    bolaBiruBesar.transform.position = new Vector3(node.worldPosition.x, approximatedPosition.y, node.worldPosition.z);
 
                     // gas
                     float avgSpeed = (leftFrontWheel.rotationSpeed + rightFrontWheel.rotationSpeed)/2;
@@ -157,27 +172,63 @@ public class CarController : MonoBehaviour
                     // brake
                     inputBrakeAcceleration = 0;
 
+                    // make sure its walkable
+                    Vector2Int nodeCell = MapBuilder.instance.WorldToMap(node.worldPosition);
+                    if (MapBuilder.instance.walkableMap[nodeCell.x, nodeCell.y] == MapBuilder.TileTypeWalkable.NotWalkable){
+                        Debug.Log("path canceled, not walkable");
+                        inputBrakeAcceleration = 1;
+                        StartCoroutine(Recovering());
+                        break;
+                    }
 
-                    // if near nextNode
-                    if (nodesEnumerator.Current == null ||
-                    Vector2.Distance(nodePos, myPos) < goToNodeAccuracy ||
-                    (node.isReversing && Vector2.Distance(nodePos, myPos) < goToNodeAccuracy*4)){
-                        bool hasNext = nodesEnumerator.MoveNext();
-                        if (!hasNext){
-                            Debug.Log("sampe");
-                            inputBrakeAcceleration = 1;
-                            state = State.NeedPath;
+
+                    // find next nodes that near player
+                    int nodeIndex2 = nodeIndex;
+                    while (true){
+                        Node node2 = nodes[nodeIndex2];
+                        Vector2 node2Pos = new Vector2(node2.worldPosition.x, node2.worldPosition.z);
+
+                        // if the node is near player
+                        if (node2 == null ||
+                            //Vector2.Distance(node2Pos, myPos) < 0.1f || // jika node terakhir, maka posisi mobil harus sangat mendekati (agar bisa diffuse bomb)
+                            (node2.isChangingDirection && Vector2.Distance(node2Pos, myPos) < goToNodePreciseAccuracy) || // jika chanching direction, harus percise
+                            (!node2.isChangingDirection && nodeIndex2+2>=nodes.Count && Vector2.Distance(node2Pos, myPos) < goToNodePreciseAccuracy) || // last 2 node, harus precise
+                            (!node2.isChangingDirection && nodeIndex2+2<nodes.Count && Vector2.Distance(node2Pos, myPos) < goToNodeAccuracy)  // if not last 2 node, can be skipped
+                        ){
+                            timerForReachingNextNode = timeNotReachingNextNodeForRecovery;
+
+                            mapBuilder.Explore(mapBuilder.WorldToMap(node2.worldPosition), false);
+                            
+                            recoveryCount = 0;
+
+                            // move next
+                            nodeIndex = nodeIndex2 + 1;
+                            if (nodeIndex >= nodes.Count){
+                                Debug.Log("sampe");
+                                inputBrakeAcceleration = 1;
+                                state = State.NeedPath;
+                                break;
+                            }
                         }
-                        // if node is not walkable (maybe htere's wall revealed nearby)
-                        Vector2Int nodeCell = MapBuilder.instance.WorldToMap(nodesEnumerator.Current.worldPosition);
-                        if (MapBuilder.instance.walkableMap[nodeCell.x, nodeCell.y] == MapBuilder.TileTypeWalkable.NotWalkable){
-                            Debug.Log("path canceled");
-                            inputBrakeAcceleration = 1;
-                            state = State.NeedPath;
+                        
+                        if (node2.isChangingDirection){
+                            // should not skip changing direction
+                            break;
+                        }
+                        // player is not near yet
+                        nodeIndex2 += 1;
+                        // Dont allow more than nodesCount
+                        if (nodeIndex2 >= nodes.Count){
+                            break;
                         }
                     }
 
                     
+
+                    if (timerForReachingNextNode < 0){
+                        Debug.LogWarning("Robot takes too long, Recovering");
+                        StartCoroutine(Recovering());
+                    }
                     
                 }
                 
@@ -216,59 +267,22 @@ public class CarController : MonoBehaviour
         UpdateWheelMesh(leftBackWheel, leftBackWheelMesh);
         UpdateWheelMesh(rightBackWheel, rightBackWheelMesh);
 
-        // Estimate position using triangulation
-        Vector3? triangulationEstimation = Triangulate3D(landmarks[0].position
-            , landmarks[1].position
-            , landmarks[2].position
-            , Vector3.Distance(landmarks[0].position, transform.position)
-            , Vector3.Distance(landmarks[1].position, transform.position)
-            , Vector3.Distance(landmarks[2].position, transform.position));
-        if (triangulationEstimation != null){
-            Vector3 pos = (Vector3)triangulationEstimation;
-            triangulationLocationVisualizer.position = new Vector3(pos.x, triangulationLocationVisualizer.position.y, pos.z);
-            triangulationLocationVisualizer.gameObject.SetActive(true);
-        } else {
-            triangulationLocationVisualizer.gameObject.SetActive(false);
-        }
-
-        // Estimate position using inertia
-        float dt = Time.fixedDeltaTime;
-
-        float velocity = Vector3.Dot(rb.velocity, transform.forward);
-        //float velocity = rb.velocity.magnitude;
-        
-
-
-        float avgSteeringAngle = (leftFrontWheel.steerAngle + rightFrontWheel.steerAngle)/2f;
-        float phi = avgSteeringAngle * Mathf.Deg2Rad;
-
-        float dx = velocity * Mathf.Sin(theta_inertia) * dt;
-        float dz = velocity * Mathf.Cos(theta_inertia) * dt;
-        float dtheta = (velocity / wheelBase) * Mathf.Tan(phi) * dt;
-
-        x_inertia += dx;
-        z_inertia += dz;
-        theta_inertia += dtheta;
-
-        intertiaLocationVisualizer.position = new Vector3(x_inertia, intertiaLocationVisualizer.position.y, z_inertia);
-        intertiaLocationVisualizer.rotation = Quaternion.Euler(0, theta_inertia * Mathf.Rad2Deg, 0);
-
-        // Average the two estimations
-        Vector3 averageEstimation = (triangulationLocationVisualizer.position + intertiaLocationVisualizer.position) / 2f;
-        averageLocationVisualizer.position = new Vector3(averageEstimation.x, averageLocationVisualizer.position.y, averageEstimation.z);
     }
 
     private void GoHybridAStar(){
+        state = State.WaitingForPath;
+        mapBuilder.StopAllCoroutines();
         Debug.Log("starting hybrid A*");
-        StartCoroutine(mapBuilder.getPathToBestTarget((nodes) => AfterHybridAStar(nodes)));
+        StartCoroutine(mapBuilder.getPathToBestTarget((nodess) => AfterHybridAStar(nodess)));
         
     }
-    private void AfterHybridAStar(List<Node> nodes){
+    private void AfterHybridAStar(List<Node> nodess){
+        nodes = nodess;
         if (nodes != null && nodes.Count>0){
+            timerForReachingNextNode = timeNotReachingNextNodeForRecovery;
             state = State.Exploring;
 
-            nodesEnumerator = nodes.GetEnumerator();
-            nodesEnumerator.MoveNext();
+            nodeIndex = 0;
 
             // remove existing nodesDebug
             foreach (GameObject u in nodesDebug){
@@ -279,20 +293,45 @@ public class CarController : MonoBehaviour
             // add new nodesDebug
             foreach (Node node in nodes){
                 GameObject bolaBiruu = Instantiate(bolaBiru,
-                    new Vector3(node.worldPosition.x, transform.position.y, node.worldPosition.z),
+                    new Vector3(node.worldPosition.x, approximatedPosition.y, node.worldPosition.z),
                     Quaternion.identity);
                 nodesDebug.Add(bolaBiruu);
             }
         } else {
-            Debug.LogWarning("Path failed");
-            state = State.PermanentStop;
+            Debug.LogWarning("Path failed, recovering");
             StartCoroutine(Recovering());
         }
     }
 
     private IEnumerator Recovering(){
-        yield return new WaitForSeconds(1);
-        state = State.NeedPath;
+        recoveryCount++;
+        state = State.PermanentStop;
+        yield return new WaitForSeconds(2);
+        if (recoveryCount >= recoveryCountBeforePanic){
+            Debug.LogWarning("PanicMode");
+            state = State.PanicMode;
+
+            inputForward = lastPanicIsForward ? 1 : -1;
+            
+            inputSteerAngle = 0;
+            inputBrakeAcceleration = 0;
+
+            yield return new WaitForSeconds(2f);
+
+            inputForward = 0;
+            inputSteerAngle = 0;
+            inputBrakeAcceleration = 0;
+
+            state = State.NeedPath;
+            lastPanicIsForward = !lastPanicIsForward;
+
+            recoveryCount = 0;
+
+        } else {
+            Debug.Log("Recovering");
+            state = State.NeedPath;
+        }
+        
     }
     
     private Vector3? Triangulate3D(Vector3 pos1, Vector3 pos2, Vector3 pos3, float dist1, float dist2, float dist3){
@@ -322,7 +361,48 @@ public class CarController : MonoBehaviour
         Vector3 position;
         Quaternion rotation;
         collider.GetWorldPose(out position, out rotation);
-        wheelMesh.transform.position = position;
+        wheelMesh.transform.position = position; // boleh menggunakan transform karena hanya untuk membuat mesh match dengan collider
         wheelMesh.transform.rotation = rotation;
+    }
+
+    private Vector3 ApproximateLocation(){
+         // Estimate position using triangulation
+        Vector3? triangulationEstimation = Triangulate3D(landmarks[0].position
+            , landmarks[1].position
+            , landmarks[2].position
+            , Vector3.Distance(landmarks[0].position, transform.position) // boleh transform.position karena untuk triangulasi
+            , Vector3.Distance(landmarks[1].position, transform.position)
+            , Vector3.Distance(landmarks[2].position, transform.position));
+        if (triangulationEstimation != null){
+            Vector3 pos = (Vector3)triangulationEstimation;
+            triangulationLocationVisualizer.position = new Vector3(pos.x, triangulationLocationVisualizer.position.y, pos.z);
+            triangulationLocationVisualizer.gameObject.SetActive(true);
+        } else {
+            triangulationLocationVisualizer.gameObject.SetActive(false);
+        }
+
+        // Estimate position using inertia
+        float dt = Time.fixedDeltaTime;
+
+        float velocity = Vector3.Dot(rb.velocity, transform.forward);
+        float avgSteeringAngle = (leftFrontWheel.steerAngle + rightFrontWheel.steerAngle)/2f;
+        float phi = avgSteeringAngle * Mathf.Deg2Rad;
+
+        float dx = velocity * Mathf.Sin(theta_inertia) * dt;
+        float dz = velocity * Mathf.Cos(theta_inertia) * dt;
+        float dtheta = (velocity / wheelBase) * Mathf.Tan(phi) * dt;
+
+        x_inertia += dx;
+        z_inertia += dz;
+        theta_inertia += dtheta;
+
+        intertiaLocationVisualizer.position = new Vector3(x_inertia, intertiaLocationVisualizer.position.y, z_inertia);
+        intertiaLocationVisualizer.rotation = Quaternion.Euler(0, theta_inertia * Mathf.Rad2Deg, 0);
+
+        // Average the two estimations
+        Vector3 averageEstimation = (triangulationLocationVisualizer.position + intertiaLocationVisualizer.position) / 2f;
+        averageLocationVisualizer.position = new Vector3(averageEstimation.x, averageLocationVisualizer.position.y, averageEstimation.z);
+
+        return triangulationLocationVisualizer.position; // boleh karena posisionnya based on code
     }
 }

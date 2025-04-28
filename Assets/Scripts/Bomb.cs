@@ -8,6 +8,7 @@ public class Bomb : MonoBehaviour
 
     void OnTriggerEnter(Collider other) {
         if(other.CompareTag("Player")){
+            other.GetComponent<MapBuilder>().BombDifused();
             BombCounter.instance.DefuseBomb();
             gameObject.SetActive(false);
         }

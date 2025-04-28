@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.Assertions;
 using static MapBuilder;
@@ -8,6 +9,7 @@ using static MapBuilder;
 //Hybrid A* pathfinding algorithm
 public class HybridAStar : MonoBehaviour
 {
+    public TMP_Text heapSizeText;
     public Material lineMaterial;
     //public MapBuilder mapBuilder;
     //The distance between each waypoint
@@ -20,11 +22,16 @@ public class HybridAStar : MonoBehaviour
     private float[] steeringAngles = new float[] {-maxAngle * Mathf.Deg2Rad, 0, maxAngle * Mathf.Deg2Rad}; //TODO:FIX KIRI
 
     //The car will never reach the exact goal position, this is how accurate we want to be
-    private const float posAccuracy = 0.8f;
+    private const float posAccuracy = 0.5f;
 
-    private float[,,] lowestCost;
+    private float[,,,] lowestCost;
     public int directionCount = 8; // for checking direction
     private GameObject debugLine;
+    public int heapPopPerFrame = 3;
+    public GameObject bolaBiruBesar;
+
+
+    private int heapPopCount = 0;
 
     
     // singleton
@@ -61,14 +68,15 @@ public class HybridAStar : MonoBehaviour
         int mapHeight = walkableMap.GetLength(1);
 
         // init lowestCost
-        lowestCost = new float[mapWidth, mapHeight, directionCount];
+        lowestCost = new float[mapWidth, mapHeight, directionCount, 2];
         for (int x = 0; x < mapWidth; x++)
         {
             for (int z = 0; z < mapHeight; z++)
             {
                 for (int i = 0; i < directionCount; i++)
                 {
-                    lowestCost[x, z, i] = float.MaxValue;
+                    lowestCost[x, z, i, 0] = float.MaxValue;
+                    lowestCost[x, z, i, 1] = float.MaxValue;
                 }
             }
         }
@@ -84,17 +92,27 @@ public class HybridAStar : MonoBehaviour
         //Create the first node
         Vector2Int startCellPosition = MapBuilder.instance.WorldToMap(startPosition);
 
+        if (aStarMap[startCellPosition.x, startCellPosition.y] == float.MaxValue){
+            Debug.Log("Hybrid done: no A* path to goal");
+            callback(null);
+            yield break;
+        }
+
         Debug.Log("hybrid A* start at " + startPosition.ToString() + ", cell: " + startCellPosition.ToString());
 
         //int startRoundedRotation = Mathf.FloorToInt(startRotation/(2*Mathf.PI) *  directionCount)  % directionCount;
-        Node startNode = new Node(null, startPosition, startRotation, false, 0, aStarMap[startCellPosition.x, startCellPosition.y], noTurnAtBeginningCount);
+        Node startNode = new Node(null, startPosition, startRotation, false, 0, aStarMap[startCellPosition.x, startCellPosition.y], noTurnAtBeginningCount, false);
         openNodes.Add(startNode);
 
         // for starting backwards
-        Node startNode2 = new Node(null, startPosition, startRotation, true, 0, aStarMap[startCellPosition.x, startCellPosition.y], noTurnAtBeginningCount);
+        Node startNode2 = new Node(null, startPosition, startRotation, true, 0, aStarMap[startCellPosition.x, startCellPosition.y], noTurnAtBeginningCount, false);
         openNodes.Add(startNode2);
 
-        yield return null;
+        heapPopCount += 1;
+        if (heapPopCount >= heapPopPerFrame){
+            heapPopCount = 0;
+            yield return null;
+        }
 
         // hybrid A*
         while (openNodes.Count > 0)
@@ -102,26 +120,31 @@ public class HybridAStar : MonoBehaviour
             //Pop from heap
             Node currentNode = openNodes.RemoveFirst();
 
+            heapSizeText.text = "Heap Size: " + openNodes.Count;
+
             //Mark this node as visited
             Vector2Int currentNodeCellPosition = MapBuilder.instance.WorldToMap(currentNode.worldPosition);
             int currentNodeRoundedRotation = Rad2RoundedDirection(currentNode.direction);
 
             // buang yang tidak guna
-            if (currentNode.costStartToNode > lowestCost[currentNodeCellPosition.x, currentNodeCellPosition.y, currentNodeRoundedRotation]){
-                continue;
-            }
+            // if (currentNode.costStartToNode > lowestCost[currentNodeCellPosition.x, currentNodeCellPosition.y, currentNodeRoundedRotation, currentNode.isReversing ? 1 : 0]){
+            //     continue;
+            // }
+
             
 
             int j = 0;
             for (int i = 0; i < directionCount; i++){
-                j += lowestCost[currentNodeCellPosition.x, currentNodeCellPosition.y, i] != float.MaxValue ? 1 : 0;
+                j += lowestCost[currentNodeCellPosition.x, currentNodeCellPosition.y, i, currentNode.isReversing ? 1 : 0] != float.MaxValue ? 1 : 0;
             }
             // Debug.Log("Out heap: " + currentNode.worldPosition.ToString() + 
             //     ", rotation: " + currentNode.direction.ToString() +
             //     ", cell: " + currentNodeCellPosition.ToString() +
             //     ", rounded rotation: " + currentNodeRoundedRotation.ToString());
 
-            MapVisualizer.instance.VisitHybridMap(currentNodeCellPosition, (float)j/directionCount);
+            MapVisualizer.instance.VisitHybridMap(currentNodeCellPosition, (float)j/directionCount/2);
+
+            bolaBiruBesar.transform.position = currentNode.worldPosition;
 
             // Check if we are at the goal position
             if (Vector2.Distance(
@@ -152,9 +175,11 @@ public class HybridAStar : MonoBehaviour
 
                 //If the neighbor is walkable and not visited
                 if (walkableMap[neighborCellPosition.x, neighborCellPosition.y] == MapBuilder.TileTypeWalkable.Walkable
-                    && neighborNode.costStartToNode < lowestCost[neighborCellPosition.x, neighborCellPosition.y, neighborRoundedDirection])
+                    //&& neighborNode.costStartToNode + 1 < lowestCost[neighborCellPosition.x, neighborCellPosition.y, neighborRoundedDirection, neighborNode.isReversing ? 1 : 0]
+                    && lowestCost[neighborCellPosition.x, neighborCellPosition.y, neighborRoundedDirection, neighborNode.isReversing ? 1 : 0] == float.MaxValue
+                    )
                 {
-                    lowestCost[currentNodeCellPosition.x, currentNodeCellPosition.y, currentNodeRoundedRotation] = neighborNode.costStartToNode;
+                    lowestCost[currentNodeCellPosition.x, currentNodeCellPosition.y, currentNodeRoundedRotation, neighborNode.isReversing ? 1 : 0] = neighborNode.costStartToNode;
                     //Create a new node and add it to the heap
                     openNodes.Add(neighborNode);
                 }
@@ -196,7 +221,7 @@ public class HybridAStar : MonoBehaviour
 
                 if (Mathf.Abs(steeringAngle) < 1e-3f){
                     // move forward/back
-                    if (!isChangingDirection || (node.previousNode != null && node.direction == node.previousNode.direction)){
+                    if (!isChangingDirection || (node.previousNode != null && Mathf.DeltaAngle(node.previousNode.direction, node.direction) < 10f)){
                         neighborX = worldPosition.x + majuMundur * Mathf.Cos(direction) * stepDistance;
                         neighborZ = worldPosition.z + majuMundur * Mathf.Sin(direction) * stepDistance;
                         neighborDirection = (direction) % (2 * Mathf.PI);
@@ -225,6 +250,8 @@ public class HybridAStar : MonoBehaviour
                 if (neighborCellPosition.x >= 0 && neighborCellPosition.x < width
                 && neighborCellPosition.y >= 0 && neighborCellPosition.y < height
                 && walkableMap[neighborCellPosition.x, neighborCellPosition.y] == TileTypeWalkable.Walkable){
+
+                    
                     neighbors.Add(
                         new Node(
                             node, 
@@ -233,10 +260,11 @@ public class HybridAStar : MonoBehaviour
                             majuMundur == -1,
                             costStartToNode // cost formula
                             + stepDistance/MapBuilder.instance.cellSize
-                            + (isReversing ? 0.1f : 0) // give consequences if isReversing
-                            + (isChangingDirection ? 3f : 0), // give consequences if change maju/mundur
+                            //+ (isReversing ? 0.1f : 0) // give consequences if isReversing
+                            + (isChangingDirection ? 1f : 0), // give consequences if change maju/mundur
                             aStarMap[neighborCellPosition.x, neighborCellPosition.y],
-                            isReversing == (majuMundur==1) ? noTurnAtBeginningCount : Math.Max(0, node.countdownBeforeCanTurn-1)
+                            isChangingDirection ? noTurnAtBeginningCount : Math.Max(0, node.countdownBeforeCanTurn-1),
+                            isChangingDirection
                         )
                     );
 

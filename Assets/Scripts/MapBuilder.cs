@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Data.Common;
+using TMPro;
 using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.Assertions;
@@ -33,6 +34,7 @@ public class MapBuilder : MonoBehaviour
 
 
     public GameObject bestTargetDebug;
+    public TMP_Text bombText;
 
 
     // temporary variables
@@ -64,8 +66,8 @@ public class MapBuilder : MonoBehaviour
     private float lidarNeededDistance = 0;
     private LineRenderer[] lineRenderers;
     public static MapBuilder instance = null;
-
-
+    public List<Vector3> bombPositions = new List<Vector3>();
+    public bool scanWholeLevelFirst;
 
     void Awake()
     {
@@ -119,7 +121,65 @@ public class MapBuilder : MonoBehaviour
 
     void Start()
     {
-        Lidar();
+        Ray ray = new Ray();
+        ray.direction = Vector3.down;
+        // joel method
+        if (scanWholeLevelFirst){
+            Debug.Log("joel metohd");
+            for (int i = 0; i < tileTypeMap.GetLength(0); i++){
+                for (int j = 0; j < tileTypeMap.GetLength(1); j++){
+                    Vector2Int cellPos = new Vector2Int(i, j);
+                    Vector3 worldPosition = MapToWorld(cellPos);
+                    ray.origin = new Vector3(worldPosition.x, 20, worldPosition.z);
+
+                    RaycastHit hit;
+                    bool isHit = Physics.Raycast(ray, out hit, 20);
+
+                    if (isHit && hit.collider.CompareTag("Bombs")){
+                        // store its position
+                        if (!bombPositions.Contains(hit.collider.transform.position)){
+                            bombPositions.Add(hit.collider.transform.position);
+                        }
+                        Explore(cellPos, false);
+                    } if (isHit && hit.point.y < 2.3f){
+                        Explore(cellPos, false);
+                    } else {
+                        Explore(cellPos, true);
+                    }
+                }
+            }
+
+            // sort bomb closest to farthest
+            UpdateWalkableMap();
+            aStarPlayerMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(CarController.instance.approximatedPosition));
+
+            foreach(Vector3 a in bombPositions){
+                Vector2Int aPos = WorldToMap(a);
+
+                // clear area
+                int bombRadius = 4;
+                for (int j = -bombRadius; j<=bombRadius; j++){
+                    for (int k = -bombRadius; k<=bombRadius; k++){
+                        Explore(aPos + new Vector2Int(j, k), false);
+                    }
+                }
+            }
+
+            Vector2 pPos = CarController.instance.approximatedPosition;
+            bombPositions.Sort((a,b) => {
+                Vector2Int aPos = WorldToMap(a);
+                Vector2Int bPos = WorldToMap(b);
+                int ab = Vector2.Distance(aPos, pPos).CompareTo(Vector2.Distance(bPos, pPos));
+                return -ab;
+            });
+            UpdateBombText();
+        }
+
+
+        int times = 4;
+        for (int i = 0; i < times; i++){
+            Lidar((float) i/times);
+        }
     }
 
     void Update()
@@ -129,19 +189,19 @@ public class MapBuilder : MonoBehaviour
         if (lidarNeededDistance <= 0)
         {
             lidarNeededDistance = lidarIntervalDistance;
-            Lidar();
+            Lidar(0);
 
             
             UpdateWalkableMap();
         }
     }
 
-    void Lidar(){
+    void Lidar(float angleOffset){
         // lidar in action
         for (int i = 0; i < numberOfRays; i++)
         {
             // shoot ray
-            float angle = (360f / numberOfRays) * i;
+            float angle = (360f / numberOfRays) * (i + angleOffset);
             Vector3 direction = Quaternion.Euler(0, angle, 0) * Vector3.forward;
             Ray ray = new Ray(lidarTransform.position, direction);
 
@@ -193,27 +253,53 @@ public class MapBuilder : MonoBehaviour
                     startCell.y += sy;
                 }
             }
-            int wallThickness = 5;
-            for (int j = 0; j < wallThickness && hit.collider != null; j++)
-            {
-                Explore(startCell, true);
+            // if hit something
+            if (hit.collider != null){
+                if (hit.collider.CompareTag("Bombs")){
+                    // hit bomb
 
-                int err2 = err * 2;
-                if (err2 > -dy)
-                {
-                    err -= dy;
-                    startCell.x += sx;
+                    // store its position
+                    if (!bombPositions.Contains(hit.collider.transform.position)){
+                        bombPositions.Add(hit.collider.transform.position);
+                        UpdateBombText();
+                    }
+
+                    // clear area
+                    int bombRadius = 4;
+                    Vector2Int bombPos = WorldToMap(hit.collider.transform.position);
+                    for (int j = -bombRadius; j<=bombRadius; j++){
+                        for (int k = -bombRadius; k<=bombRadius; k++){
+                            Explore(bombPos + new Vector2Int(j, k), false);
+                        }
+                    }
+
+                } else {
+                    // hit wall
+                    int wallThickness = 5;
+                    for (int j = 0; j < wallThickness && hit.collider != null; j++)
+                    {
+                        Explore(startCell, true);
+
+                        int err2 = err * 2;
+                        if (err2 > -dy)
+                        {
+                            err -= dy;
+                            startCell.x += sx;
+                        }
+                        if (err2 < dx)
+                        {
+                            err += dx;
+                            startCell.y += sy;
+                        }
+                    }
                 }
-                if (err2 < dx)
-                {
-                    err += dx;
-                    startCell.y += sy;
-                }
+                
             }
+            
         }
     }
 
-    private void Explore(Vector2Int mapPos, bool isWall)
+    public void Explore(Vector2Int mapPos, bool isWall)
     {
         // asert bounds
         if (mapPos.x < 0 || mapPos.x >= tileTypeMap.GetLength(0) || mapPos.y < 0 || mapPos.y >= tileTypeMap.GetLength(1)) {
@@ -291,13 +377,18 @@ public class MapBuilder : MonoBehaviour
             bestTargetInCell = WorldToMap(bestTargetInWorld);
         } else {
             // find frontier
-            aStarPlayerMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(transform.position));
+            aStarPlayerMap = AStar.Instance.CalculateCostToGoal(walkableMap, WorldToMap(CarController.instance.approximatedPosition));
             Assert.IsNotNull(aStarPlayerMap);
             MapVisualizer.instance.UpdateAStarPlayerMap(aStarPlayerMap);
 
             
             /// get best target (frontier)
-            bestTargetInCell = getBestTargetInCell();
+            if (bombPositions.Count == 0){
+                bestTargetInCell = getBestTargetInCell();
+            } else {
+                bestTargetInCell = WorldToMap(bombPositions[0]);
+            }
+            
             if (bestTargetInCell == Vector2Int.zero){
                 // entah kenapa best target jika fail
                 Debug.Log("Best Target Finding Failed");
@@ -312,7 +403,7 @@ public class MapBuilder : MonoBehaviour
         Debug.Log("Best target: " + bestTargetInCell.ToString());
         bestTargetDebug.transform.position = bestTargetInWorld;
         if (walkableMap[bestTargetInCell.x, bestTargetInCell.y] != TileTypeWalkable.Walkable){
-            Debug.Log("Best Target Finding Failed: walkable");
+            Debug.Log("Best Target Finding Failed: not walkable: " + bestTargetDebug.transform.position + ", cell: " + bestTargetInCell);
             callback(null);
             yield break;
         }
@@ -326,7 +417,7 @@ public class MapBuilder : MonoBehaviour
 
 
         StartCoroutine(HybridAStar.instance.GeneratePath(
-            transform.position,
+            CarController.instance.approximatedPosition,
             Mathf.PI/2 - transform.eulerAngles.y * Mathf.Deg2Rad,
             bestTargetInWorld,
             walkableMap,
@@ -351,7 +442,7 @@ public class MapBuilder : MonoBehaviour
         List<Vector2Int> visited = new List<Vector2Int>();
         foreach (Vector2Int tile in frontierTiles)
         {
-            if (!visited.Contains(tile))
+            if (!visited.Contains(tile) && walkableMap[tile.x, tile.y] == TileTypeWalkable.Walkable)
             {
                 // apply BFS
                 List<Vector2Int> cluster = new List<Vector2Int>();
@@ -368,7 +459,7 @@ public class MapBuilder : MonoBehaviour
                         foreach (Vector2Int neighbor in neighbors)
                         {
                             Vector2Int neighborPosition = current + neighbor;
-                            if (frontierTiles.Contains(neighborPosition) && !visited.Contains(neighborPosition))
+                            if (frontierTiles.Contains(neighborPosition) && !visited.Contains(neighborPosition) && walkableMap[neighborPosition.x, neighborPosition.y] == TileTypeWalkable.Walkable)
                             {
                                 queue.Enqueue(neighborPosition);
                             }
@@ -393,14 +484,14 @@ public class MapBuilder : MonoBehaviour
             {
                 // score = A* distance + angle difference
                 Assert.IsNotNull(aStarPlayerMap);
-                float score2 = - aStarPlayerMap[tile.x, tile.y] - Vector2.Angle(WorldToMap(transform.position), tile) / 360f * 50f;
+                float score2 = - aStarPlayerMap[tile.x, tile.y] - Mathf.Sin(Vector2.Angle(WorldToMap(CarController.instance.approximatedPosition), tile)) / 360f * 50f;
                 if (score2 > highScore2){
                     highScore2 = score2;
                     highScoreHolder2 = tile;
                 }
             }
 
-            float clusterScore = cluster.Count*5 + highScore2; // score counting
+            float clusterScore = cluster.Count*2 + highScore2; // score counting
             if (clusterScore > bestClusterScore)
             {
                 bestClusterScore = clusterScore;
@@ -418,7 +509,7 @@ public class MapBuilder : MonoBehaviour
         Vector2Int highScoreHolder = bestCluster[0];
         foreach (Vector2Int tile in bestCluster)
         {
-            float score = - aStarPlayerMap[tile.x, tile.y] - Mathf.Sin(Vector2.Angle(WorldToMap(transform.position), tile)) / 360f * 50f;
+            float score = - aStarPlayerMap[tile.x, tile.y] - Mathf.Sin(Vector2.Angle(WorldToMap(CarController.instance.approximatedPosition), tile)) / 360f * 50f;
             if (score > highScore) {
                 highScore = score;
                 highScoreHolder = tile;
@@ -436,7 +527,7 @@ public class MapBuilder : MonoBehaviour
     }
     public Vector3 MapToWorld(Vector2Int mapPos)
     {
-        Vector3 cellPos = new Vector3((mapPos.x + tilemapOffset.x) * cellSize, transform.position.y, (mapPos.y + tilemapOffset.y) * cellSize);
+        Vector3 cellPos = new Vector3((mapPos.x + tilemapOffset.x) * cellSize, CarController.instance.approximatedPosition.y, (mapPos.y + tilemapOffset.y) * cellSize);
         return cellPos;
     }
 
@@ -495,6 +586,17 @@ public class MapBuilder : MonoBehaviour
         }
 
         return minkowskiMap;
+    }
+    public void BombDifused(){
+        bombPositions.RemoveAt(0);
+        UpdateBombText();
+    }
+
+    private void UpdateBombText(){
+        bombText.text = "Bombs detected:";
+        foreach (Vector3 bombPosition in bombPositions){
+            bombText.text += "\n- " + bombPosition.ToString();
+        }
     }
 
 }
